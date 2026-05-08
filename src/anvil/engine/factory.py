@@ -51,17 +51,22 @@ def build_engine(
     engine_args = engine_args or {}
 
     if engine == "vllm":
-        # M1 introduces this. Surface explicitly rather than silently falling
-        # back, so the user knows their request was not honored.
-        raise ConfigError(
-            "engine='vllm' is not implemented in M0; use engine='hf' or "
-            "engine='auto' (which falls back to hf in M0). vLLM lands in M1 "
-            "(design §16.10)."
+        from anvil.engine._vllm.adapter import VLLMEngine
+
+        return VLLMEngine(
+            model_id=model_id,
+            revision=revision,
+            dtype=dtype,
+            engine_args=engine_args,
         )
 
     if engine == "auto":
-        _log.info("engine='auto' → 'hf' (M0 only ships the HF slow path).")
-        engine = "hf"
+        # M1 default: prefer vLLM if it is installed and CUDA is available;
+        # otherwise fall back to the HF slow path. We do not gate on the
+        # architecture being on the fast list — that's M6's call (the slow
+        # path is correct on every architecture, just slower).
+        engine = _auto_select(engine_args)
+        _log.info("engine='auto' resolved to %r", engine)
 
     if engine == "hf":
         from anvil.engine._hf.runner import HFEngine
@@ -75,6 +80,35 @@ def build_engine(
         )
 
     raise ConfigError(f"unknown engine choice: {engine!r}")
+
+
+def _auto_select(engine_args: dict[str, Any] | None) -> EngineChoice:
+    """Pick a backend when ``engine='auto'``.
+
+    Rules:
+
+    * If vLLM is importable AND CUDA is available, choose ``vllm``.
+    * Otherwise choose ``hf`` (the slow path always works).
+
+    The choice is logged so the manifest's ``engine`` field documents what
+    actually ran.
+    """
+    del engine_args
+    try:
+        import vllm  # noqa: F401
+    except ImportError:
+        return "hf"
+    try:
+        import warnings
+
+        import torch
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            cuda_ok = torch.cuda.is_available()
+    except (ImportError, RuntimeError, OSError):
+        return "hf"
+    return "vllm" if cuda_ok else "hf"
 
 
 __all__ = ["build_engine", "EngineChoice"]

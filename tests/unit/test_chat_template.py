@@ -48,6 +48,26 @@ class TestChatTemplateCanonicalize:
         b = ChatTemplate(jinja_source="{{ y }}")
         assert a.hash != b.hash
 
+    def test_block_internal_whitespace_irrelevant(self) -> None:
+        # `{%for x%}` and `{% for x %}` must hash identically — whitespace
+        # inside Jinja blocks is cosmetic.
+        tight = ChatTemplate(jinja_source="{%for x in xs%}{{x}}{%endfor%}")
+        loose = ChatTemplate(jinja_source="{% for x in xs %}{{ x }}{% endfor %}")
+        assert tight.hash == loose.hash
+        assert tight.canonicalize() == loose.canonicalize()
+
+    def test_if_else_block_whitespace_irrelevant(self) -> None:
+        a = ChatTemplate(jinja_source="{%if a%}A{%else%}B{%endif%}")
+        b = ChatTemplate(jinja_source="{% if a %}A{% else %}B{% endif %}")
+        assert a.hash == b.hash
+
+    def test_canonicalize_idempotent(self) -> None:
+        # canonicalize(canonicalize(x)) == canonicalize(x).
+        ct = ChatTemplate(jinja_source="{% for m in messages %}{{ m.content }}{% endfor %}")
+        first = ct.canonicalize()
+        second = ChatTemplate(jinja_source=first).canonicalize()
+        assert first == second
+
 
 class TestChatTemplateRender:
     def test_render_simple_message(self) -> None:

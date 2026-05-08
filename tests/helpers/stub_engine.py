@@ -72,9 +72,56 @@ class StubEngine:
 
     # ---------------------------------------------------------- placeholders
     def loglikelihood(self, requests: list[LogLikelihood]) -> list[tuple[float, bool]]:
-        # Return a constant for each request — the runner doesn't use this in
-        # M0. Length-aware so callers can still distinguish requests.
-        return [(-len(r.continuation) * 0.1, False) for r in requests]
+        """Synthesize per-(context, continuation) logprobs for offline tests.
+
+        Strategy: extract the last *single uppercase letter* from the
+        ``context`` (we treat that as the gold answer cue, e.g. ``"Answer: B"``
+        in a few-shot exemplar) and award the highest score to the matching
+        continuation. The next-best score goes to the alphabetically-adjacent
+        letter, etc. With ``miss_every`` set, every Nth doc deliberately gets
+        the wrong score order so accuracy lands in the M-acceptance range.
+        """
+        out: list[tuple[float, bool]] = []
+        # Group consecutive requests sharing the same context (one MCQ doc).
+        ctx_groups: list[list[int]] = []
+        current_ctx: str | None = None
+        for i, req in enumerate(requests):
+            if req.context != current_ctx:
+                ctx_groups.append([i])
+                current_ctx = req.context
+            else:
+                ctx_groups[-1].append(i)
+
+        per_request: dict[int, tuple[float, bool]] = {}
+        for indices in ctx_groups:
+            self._counter += 1
+            ctx = requests[indices[0]].context
+            gold_letter = self._extract_last_letter(ctx)
+            miss = self._miss_every > 0 and self._counter % self._miss_every == 0
+            for idx in indices:
+                cont = requests[idx].continuation.strip()
+                # Higher logprob (less negative) for the right letter.
+                if cont == gold_letter and not miss:
+                    score = -0.1
+                elif cont == gold_letter and miss:
+                    score = -3.0  # bury the right answer
+                else:
+                    score = -1.0
+                per_request[idx] = (score, False)
+        for i in range(len(requests)):
+            out.append(per_request[i])
+        return out
+
+    @staticmethod
+    def _extract_last_letter(text: str) -> str:
+        """Return the last standalone single uppercase letter in ``text``.
+
+        Matches the format used by MMLU few-shot exemplars (``Answer: B``).
+        """
+        import re as _re
+
+        matches = _re.findall(r"\b([A-Z])\b", text)
+        return matches[-1] if matches else "A"
 
     def loglikelihood_rolling(self, requests: list[str]) -> list[float]:
         return [-len(r) * 0.1 for r in requests]

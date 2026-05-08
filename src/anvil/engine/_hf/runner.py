@@ -265,41 +265,95 @@ class HFEngine:
         return truncated
 
     # -------------------------------------------------------- log-likelihood
+    LOGLIKELIHOOD_BATCH_SIZE: int = 8
+    """Per-forward-pass row count. Small enough to fit big-vocab logits in 24GB."""
+
     @torch.inference_mode()
     def loglikelihood(self, requests: list[LogLikelihood]) -> list[tuple[float, bool]]:
         """Batched (context, continuation) log-likelihood.
 
-        For each pair we encode ``context + continuation`` and read the
-        model's logits at the continuation positions. ``is_greedy`` is True
-        if ``argmax(logits) == continuation_token`` at every step.
+        Tokenizes each pair, packs as many as fit into a fixed-size batch,
+        runs a single forward, and reads logits at the continuation positions.
+        Left-padding so the continuation suffix is contiguous on the right
+        (so position offsets are simple).
+
+        ``is_greedy`` is True iff ``argmax(logits) == continuation_token`` at
+        every continuation position.
         """
         if not requests:
             return []
-        results: list[tuple[float, bool]] = []
-        # Encode pairs individually because continuation lengths vary per pair.
+
+        # Pre-tokenize all pairs so we know the shapes upfront.
+        pairs: list[tuple[list[int], list[int]]] = []  # (ctx_ids, full_ids)
         for req in requests:
             ctx_ids = self.tokenizer.encode(req.context, add_special_tokens=False)
             full_ids = self.tokenizer.encode(
                 req.context + req.continuation, add_special_tokens=False
             )
-            cont_ids = full_ids[len(ctx_ids) :]
-            if not cont_ids:
-                results.append((0.0, True))
+            pairs.append((ctx_ids, full_ids))
+
+        results: list[tuple[float, bool]] = []
+        pad_id = self.tokenizer.pad_token_id
+        if pad_id is None:
+            pad_id = self.tokenizer.eos_token_id or 0
+
+        for batch_start in range(0, len(pairs), self.LOGLIKELIHOOD_BATCH_SIZE):
+            batch = pairs[batch_start : batch_start + self.LOGLIKELIHOOD_BATCH_SIZE]
+
+            # Skip rows whose continuation is empty (degenerate); they score 0.
+            empty_indices = [i for i, (ctx, full) in enumerate(batch) if len(full) <= len(ctx)]
+            non_empty = [
+                (i, ctx, full) for i, (ctx, full) in enumerate(batch) if len(full) > len(ctx)
+            ]
+            if not non_empty:
+                results.extend((0.0, True) for _ in batch)
                 continue
-            inp = torch.tensor([full_ids], device=self._device)
-            logits = self.model(input_ids=inp).logits[0]  # [seq_len, vocab]
-            log_probs = torch.log_softmax(logits, dim=-1)
-            total = 0.0
-            greedy = True
-            for offset, tok in enumerate(cont_ids):
-                pos = len(ctx_ids) + offset - 1
-                if pos < 0:
-                    continue  # degenerate empty-context case
-                step_logp = log_probs[pos]
-                total += float(step_logp[tok].item())
-                if int(step_logp.argmax().item()) != tok:
-                    greedy = False
-            results.append((total, greedy))
+
+            max_len = max(len(full) for _, _, full in non_empty)
+            input_ids = torch.full(
+                (len(non_empty), max_len), pad_id, dtype=torch.long, device=self._device
+            )
+            attention_mask = torch.zeros(
+                (len(non_empty), max_len), dtype=torch.long, device=self._device
+            )
+            for row, (_orig_idx, _ctx, full) in enumerate(non_empty):
+                offset = max_len - len(full)
+                input_ids[row, offset:] = torch.tensor(full, device=self._device)
+                attention_mask[row, offset:] = 1
+
+            try:
+                logits = self.model(
+                    input_ids=input_ids, attention_mask=attention_mask
+                ).logits  # [B, max_len, vocab]
+            except RuntimeError as exc:
+                raise EngineError(f"HF forward (loglikelihood) failed: {exc}") from exc
+
+            # Per-row scoring.
+            row_results: dict[int, tuple[float, bool]] = {}
+            for row, (orig_idx, ctx, full) in enumerate(non_empty):
+                offset = max_len - len(full)
+                cont_start = offset + len(ctx)
+                cont_ids = full[len(ctx) :]
+                # We need logits[row, cont_start - 1 : cont_start - 1 + len(cont_ids)]
+                # — each predicts the token at cont_start + j for j in [0, len(cont_ids)).
+                first_pos = cont_start - 1
+                last_pos = first_pos + len(cont_ids)  # exclusive
+                slab = logits[row, first_pos:last_pos]  # [len(cont_ids), vocab]
+                step_log_probs = torch.log_softmax(slab.float(), dim=-1)
+                cont_tensor = torch.tensor(cont_ids, device=self._device)
+                # Gather logprobs at the chosen tokens.
+                chosen = step_log_probs.gather(-1, cont_tensor.unsqueeze(-1)).squeeze(-1)
+                total = float(chosen.sum().item())
+                argmaxes = step_log_probs.argmax(dim=-1)
+                greedy = bool((argmaxes == cont_tensor).all().item())
+                row_results[orig_idx] = (total, greedy)
+
+            for idx in range(len(batch)):
+                if idx in empty_indices:
+                    results.append((0.0, True))
+                else:
+                    results.append(row_results[idx])
+
         return results
 
     @torch.inference_mode()

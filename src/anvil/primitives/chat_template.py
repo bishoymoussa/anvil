@@ -29,7 +29,6 @@ The hash is ``sha256(canonicalize(jinja_source) + "\n" + fewshot_style)``.
 from __future__ import annotations
 
 import hashlib
-import io
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Self
@@ -196,49 +195,87 @@ class ChatTemplate:
     def canonicalize(self) -> str:
         """Whitespace- and comment-normalized rendering of the source.
 
-        Operates on the Jinja token stream, so cosmetic edits to the source
-        (extra spaces, reformatted comments, single vs double quotes) do not
-        change the result. The semantic content is preserved.
+        Two-pass over the Jinja token stream:
+
+        1. Collect non-comment tokens, normalizing per-token content (strings
+           re-quoted with double quotes, whitespace runs collapsed in DATA).
+        2. Re-emit with **forced single-space separation between adjacent
+           non-DATA tokens**, so ``{%for x%}`` and ``{% for x %}`` produce
+           identical canonical bytes (whitespace inside Jinja blocks is
+           cosmetic).
+
+        The §4.1 stretch — sorting branches of ``{% if %} ... {% elif %}``
+        chains by canonical form — is *not* attempted here; that requires a
+        real AST walker (``jinja2.parser.Parser``) and the cases the gap
+        analysis flags so far are all covered by the conservative form
+        below. When/if needed, extend this method, not :attr:`hash`.
         """
         if self._cached_canonical:
             return self._cached_canonical
-        out = io.StringIO()
+
         env = Environment(autoescape=False, keep_trailing_newline=False)
-        # The lexer raises on truly malformed templates; let it propagate as-is.
+
+        # Pass 1: collect tokens, dropping comments. Track whether whitespace
+        # preceded each non-comment token (only used to preserve a soft space
+        # between DATA and an adjacent block — block-internal spacing is
+        # forced unconditionally below).
+        interior: list[tuple[str, str, bool]] = []  # (kind, normalized_content, ws_before)
+        pending_ws = False
         for _line, token, value in env.lex(self.jinja_source):
             if token in (TOKEN_COMMENT, TOKEN_COMMENT_BEGIN, TOKEN_COMMENT_END):
                 continue
             if token == TOKEN_WHITESPACE:
-                out.write(" ")
+                pending_ws = True
                 continue
             if token == TOKEN_STRING:
-                # The Jinja lexer hands us the literal source — including the
-                # surrounding quotes. Strip them and re-emit with double quotes
-                # so '...' and "..." normalize to the same canonical form.
+                # Strip the original quote chars and re-emit with double
+                # quotes so '…' and "…" normalize identically.
                 if len(value) >= 2 and value[0] in ("'", '"') and value[-1] == value[0]:
                     inner = value[1:-1]
                 else:
                     inner = value
-                # The lexer doesn't unescape; pass escapes through and re-quote.
                 escaped = inner.replace("\\", "\\\\").replace('"', '\\"')
-                out.write(f'"{escaped}"')
-                continue
-            if token == TOKEN_DATA:
-                # Outside Jinja blocks: collapse runs of whitespace to a single space
-                # but preserve a single newline if the chunk is purely whitespace
-                # ending in newline (so block-level structure survives).
+                content = f'"{escaped}"'
+            elif token == TOKEN_DATA:
                 stripped = value.strip("\r\t ")
-                if stripped == "":
-                    if "\n" in value:
-                        out.write("\n")
-                    else:
-                        out.write(" ")
+                if stripped == "":  # noqa: SIM108 — keep the empty/non-empty branches distinct for readability
+                    content = "\n" if "\n" in value else ""
                 else:
-                    out.write(stripped)
+                    content = stripped
+            else:
+                content = value
+            # Drop tokens that normalize to empty content. The common case is
+            # a DATA chunk that's pure whitespace (collapses to "") between
+            # adjacent Jinja blocks — keeping it would mask the
+            # "non-DATA-to-non-DATA" boundary and break idempotency.
+            # ``pending_ws`` is *not* reset here so the next non-empty token
+            # still sees that whitespace preceded it.
+            if content == "":
                 continue
-            out.write(value)
-        result = out.getvalue().strip()
-        # Collapse repeated spaces (but not newlines).
+            interior.append((token, content, pending_ws))
+            pending_ws = False
+
+        # Pass 2: between two adjacent non-DATA tokens, force exactly one
+        # space (block-internal whitespace is semantically irrelevant). For
+        # DATA-adjacent boundaries, emit a single soft space only when the
+        # lexer saw whitespace there.
+        out: list[str] = []
+        for i, (kind, content, ws_before) in enumerate(interior):
+            if i > 0:
+                prev_kind, _, _ = interior[i - 1]
+                # Two branches with identical bodies but very different
+                # conditions: forced spacing inside Jinja blocks vs.
+                # soft spacing across DATA boundaries. Don't collapse — the
+                # rationale differs.
+                if prev_kind != TOKEN_DATA and kind != TOKEN_DATA:  # noqa: SIM114
+                    out.append(" ")
+                elif ws_before and out and out[-1] not in ("\n", " "):
+                    out.append(" ")
+            if content:
+                out.append(content)
+
+        result = "".join(out).strip()
+        # Collapse runs of spaces (preserving newlines).
         cleaned: list[str] = []
         prev_space = False
         for ch in result:

@@ -158,38 +158,76 @@ def run_eval(
     sampler_field: dict[str, Any] | None = None
 
     for task in tasks:
-        if task.request_type != "Generate":
+        if task.request_type not in ("Generate", "LogLikelihood"):
             raise TaskError(
                 f"task {task.name!r}: request_type={task.request_type!r} not yet "
-                "supported in M0; only Generate tasks ship in this milestone "
-                "(design §16.10)."
+                "supported. M1 ships Generate + LogLikelihood; Embed/Classify/Custom "
+                "land in M5 (design §16.10)."
             )
         _log.info(
-            "running task %s (n_fewshot=%d, limit=%s)",
+            "running task %s (n_fewshot=%d, limit=%s, type=%s)",
             task.name,
             task.n_fewshot,
             task.limit,
+            task.request_type,
         )
         docs: list[dict[str, Any]] = list(_iter_docs(task))
         if not docs:
             raise TaskError(f"task {task.name!r}: dataset yielded no rows")
 
-        # Build all requests, then dispatch in fixed-size batches.
-        raw_requests = [task.doc_to_request(d) for d in docs]
-        if not all(isinstance(r, Generate) for r in raw_requests):
-            raise TaskError(f"task {task.name!r}: doc_to_request must return Generate in M0")
-        requests: list[Generate] = [r for r in raw_requests if isinstance(r, Generate)]
-        # Capture the sampler so it can be recorded in the manifest.
-        s = requests[0].sampler
-        if s is not None and sampler_field is None:
-            sampler_field = s.to_manifest_field()
+        # ``doc_to_request`` may return a single Request or a Sequence (MCQ).
+        # Flatten with per-doc counts so we can re-group responses afterward.
+        flat_requests: list[Any] = []
+        per_doc_counts: list[int] = []
+        for doc in docs:
+            r = task.doc_to_request(doc)
+            if isinstance(r, list | tuple):
+                flat_requests.extend(r)
+                per_doc_counts.append(len(r))
+            else:
+                flat_requests.append(r)
+                per_doc_counts.append(1)
 
-        responses = _batched_generate(engine, requests, batch_size=2)
+        # Dispatch.
+        if task.request_type == "Generate":
+            for fr in flat_requests:
+                if not isinstance(fr, Generate):
+                    raise TaskError(
+                        f"task {task.name!r}: request_type='Generate' but a non-Generate "
+                        f"request appeared: {type(fr).__name__}"
+                    )
+            generate_requests: list[Generate] = list(flat_requests)
+            # Capture the sampler for the manifest (first non-None wins).
+            for req in generate_requests:
+                if req.sampler is not None and sampler_field is None:
+                    sampler_field = req.sampler.to_manifest_field()
+                    break
+            flat_responses: list[Any] = _batched_generate(engine, generate_requests, batch_size=2)
+        else:  # LogLikelihood
+            from anvil.primitives.request import LogLikelihood
+
+            ll_requests: list[LogLikelihood] = list(flat_requests)
+            for fr in ll_requests:
+                if not isinstance(fr, LogLikelihood):
+                    raise TaskError(
+                        f"task {task.name!r}: request_type='LogLikelihood' but a "
+                        f"non-LogLikelihood request appeared: {type(fr).__name__}"
+                    )
+            flat_responses = list(engine.loglikelihood(ll_requests))
+
+        # Re-group flat responses per-doc.
+        per_doc_responses: list[Any] = []
+        cursor = 0
+        for count in per_doc_counts:
+            chunk = flat_responses[cursor : cursor + count]
+            per_doc_responses.append(chunk if count != 1 else chunk[0])
+            cursor += count
+
         predictions = [
-            task.request_to_prediction(r, d) for r, d in zip(responses, docs, strict=True)
+            task.request_to_prediction(r, d) for r, d in zip(per_doc_responses, docs, strict=True)
         ]
         scores[task.name] = task.aggregate(predictions, docs)
-        raw_outputs[task.name] = list(responses)
+        raw_outputs[task.name] = list(per_doc_responses)
 
         task_infos.append(
             TaskInfo(

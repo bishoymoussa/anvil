@@ -30,3 +30,6 @@ env/
 runs/
 *.manifest.json
 .anvil_cache/
+
+# Source manuscript lives at docs/design.md inside the repo.
+design_manuscript/

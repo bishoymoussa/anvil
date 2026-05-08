@@ -15,7 +15,7 @@ it for rank correlations, top-k, weighted averages, etc.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
@@ -70,16 +70,24 @@ class Task(ABC):
 
     # ---------------------------------------------------- contract methods
     @abstractmethod
-    def doc_to_request(self, doc: dict[str, Any]) -> Request:
-        """Materialize a document into an engine request."""
+    def doc_to_request(self, doc: dict[str, Any]) -> Request | Sequence[Request]:
+        """Materialize a document into one or more engine requests.
+
+        Most tasks return a single :class:`Request`. Multiple-choice tasks
+        return a parallel sequence (one request per option); the runner
+        flattens, dispatches in batches at engine throughput, then re-groups
+        per-doc responses for :meth:`request_to_prediction`.
+        """
 
     @abstractmethod
     def request_to_prediction(self, response: Any, doc: dict[str, Any]) -> Any:
-        """Extract a prediction from the engine's response.
+        """Extract a prediction from the engine's response(s).
 
-        ``response`` is one element of the engine's batched output (e.g. a
-        :class:`~anvil.primitives.response.Generation` for ``Generate``
-        requests, a ``(logprob, is_greedy)`` tuple for log-likelihood, etc.).
+        For single-request tasks, ``response`` is one element of the engine's
+        batched output (e.g. a :class:`~anvil.primitives.response.Generation`
+        for ``Generate`` requests, a ``(logprob, is_greedy)`` tuple for
+        log-likelihood). For multi-request tasks (multiple-choice),
+        ``response`` is the parallel ``list`` of per-option responses.
         """
 
     def aggregate(self, predictions: list[Any], docs: list[dict[str, Any]]) -> dict[str, float]:
@@ -115,6 +123,68 @@ class Task(ABC):
             f"task {self.name!r}: doc has no 'target' or 'answer' field; override "
             "_target() or aggregate()"
         )
+
+
+class MultipleChoice(Task):
+    """N-way multiple-choice task scored by per-option log-likelihood (design §6.3).
+
+    Subclasses provide:
+
+    * ``doc_to_text(doc)`` — the shared context (question + the rendered options).
+    * ``doc_to_choices(doc)`` — the per-option continuation strings (e.g.
+      ``[" A", " B", " C", " D"]``).
+    * ``doc_to_target(doc)`` — the gold option index, ``int`` in
+      ``[0, len(choices))``.
+
+    The runner dispatches one ``LogLikelihood`` per choice and the prediction
+    is ``argmax`` over the per-option logprobs. This is the lm-evaluation-harness
+    convention for letter-based MCQ scoring; matches published baselines.
+    """
+
+    request_type: ClassVar[Literal["LogLikelihood"]] = "LogLikelihood"
+
+    @abstractmethod
+    def doc_to_text(self, doc: dict[str, Any]) -> str:
+        """Render the shared context (question + numbered options)."""
+
+    @abstractmethod
+    def doc_to_choices(self, doc: dict[str, Any]) -> Sequence[str]:
+        """Per-option continuation strings."""
+
+    @abstractmethod
+    def doc_to_target(self, doc: dict[str, Any]) -> int:
+        """Index of the correct option in :meth:`doc_to_choices`."""
+
+    def doc_to_request(self, doc: dict[str, Any]) -> Sequence[Request]:
+        # Imported inside the method to keep the module-top import graph
+        # honest under TYPE_CHECKING.
+        from anvil.primitives.request import LogLikelihood
+
+        ctx = self.doc_to_text(doc)
+        return [LogLikelihood(context=ctx, continuation=c) for c in self.doc_to_choices(doc)]
+
+    def request_to_prediction(
+        self, response: Sequence[tuple[float, bool]], doc: dict[str, Any]
+    ) -> int:
+        # ``response`` is the parallel list of (logprob, is_greedy) per choice.
+        if not response:
+            raise TaskError(f"task {self.name!r}: empty multiple-choice response")
+        scores = [r[0] for r in response]
+        return scores.index(max(scores))
+
+    def aggregate(self, predictions: list[Any], docs: list[dict[str, Any]]) -> dict[str, float]:
+        if not predictions:
+            return {self.metric_name: 0.0}
+        if len(predictions) != len(docs):
+            raise TaskError(
+                f"task {self.name!r}: aggregate got {len(predictions)} preds vs {len(docs)} docs"
+            )
+        correct = 0
+        for pred, doc in zip(predictions, docs, strict=True):
+            target = self.doc_to_target(doc)
+            if pred == target:
+                correct += 1
+        return {self.metric_name: correct / len(predictions)}
 
 
 @dataclass
