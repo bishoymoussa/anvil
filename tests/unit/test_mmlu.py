@@ -57,10 +57,43 @@ class TestMultipleChoiceMachinery:
 
 
 class TestMMLUTask:
-    def test_doc_to_choices_is_letter_continuations(self) -> None:
+    def test_doc_to_choices_default_has_leading_space(self) -> None:
+        """Default (chat_templated=False): leading-space letters — the
+        raw-prompt form that empirically scores higher on MMLU-shaped
+        instruct evaluations than single-turn-fewshot chat-templated.
+        See design comment on ``MultipleChoice.chat_templated``."""
         task = MMLU(n_fewshot=0)
-        choices = task.doc_to_choices({})
-        assert choices == [" A", " B", " C", " D"]
+        assert task.chat_templated is False
+        assert task.doc_to_choices({}) == [" A", " B", " C", " D"]
+
+    def test_doc_to_choices_chat_templated_drops_leading_space(self) -> None:
+        """Opt into chat_templated=True → bare letters (chat template's
+        trailing newline does the separation)."""
+
+        class _ChatMMLU(MMLU):
+            chat_templated = True
+
+        assert _ChatMMLU(n_fewshot=0).doc_to_choices({}) == ["A", "B", "C", "D"]
+
+    def test_doc_to_request_propagates_chat_templated_flag(self) -> None:
+        """The LogLikelihood request carries the task's chat_templated flag
+        so the engine can route to its chat-template path."""
+        from anvil.primitives.request import LogLikelihood
+
+        task = MMLU(n_fewshot=0)
+        reqs = task.doc_to_request(
+            {
+                "question": "?",
+                "choices": ["a", "b", "c", "d"],
+                "answer": 0,
+                "subject": "math",
+            }
+        )
+        assert isinstance(reqs, list) and len(reqs) == 4
+        for r in reqs:
+            assert isinstance(r, LogLikelihood)
+            assert r.chat_templated is False  # default
+            assert r.continuation in (" A", " B", " C", " D")
 
     def test_doc_to_target_is_int_answer(self) -> None:
         task = MMLU(n_fewshot=0)

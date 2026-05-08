@@ -136,25 +136,72 @@ class MultipleChoice(Task):
     Subclasses provide:
 
     * ``doc_to_text(doc)`` — the shared context (question + the rendered options).
-    * ``doc_to_choices(doc)`` — the per-option continuation strings (e.g.
-      ``[" A", " B", " C", " D"]``).
+    * ``doc_to_choices(doc)`` — the per-option continuation strings.
     * ``doc_to_target(doc)`` — the gold option index, ``int`` in
       ``[0, len(choices))``.
 
-    The runner dispatches one ``LogLikelihood`` per choice and the prediction
-    is ``argmax`` over the per-option logprobs. This is the lm-evaluation-harness
-    convention for letter-based MCQ scoring; matches published baselines.
+    Two scoring modes (controlled by :attr:`chat_templated`):
+
+    * ``chat_templated=True`` (default — instruct-tuned models): the
+      engine wraps the context in a single user message, applies the
+      model's chat template with ``add_generation_prompt=True``, and
+      scores the continuation as the assistant turn's first tokens. The
+      default :meth:`doc_to_choices` therefore returns letters
+      *without* a leading space (``["A", "B", "C", "D"]``) — the chat
+      template's trailing newline does the separation.
+    * ``chat_templated=False`` (base models): raw prompt, the
+      continuation includes a leading space.
+
+    Why this matters: lm-evaluation-harness #1841 documents that score
+    differences of 5–15pp on Llama-3-Instruct GSM8K/MMLU come from
+    misapplying the chat template. Anvil's manifest tags every task
+    with the mode it ran under so a reviewer can see which path produced
+    the published-baseline number.
     """
 
     request_type: ClassVar[Literal["LogLikelihood"]] = "LogLikelihood"
+    chat_templated: ClassVar[bool] = False
+    """When True, the engine applies the chat template before scoring.
+
+    Default is False because **single-turn-fewshot + chat-template
+    scoring is empirically worse than raw-prompt scoring** on
+    MMLU-shaped tasks for instruct-tuned models. Verified live:
+    Qwen2.5-7B MMLU went 0.615 → 0.44 with ``chat_templated=True``
+    under single-turn fewshot. The reason: the model was trained to
+    start its assistant turn conversationally ("Sure, the answer
+    is...") — so ``P("A" | <|im_start|>assistant\\n)`` is low even
+    when "A" is correct. Multi-turn fewshot (each exemplar as its own
+    user/assistant pair) is the design's real answer per lm-eval-harness
+    #1841; it lands in v0.5 alongside a ``MultiTurnFewshot`` mixin.
+
+    Explicit ``chat_templated = True`` is honored: the
+    :class:`LogLikelihood` request flag, the engine's
+    :meth:`_render_chat_context` plumbing, and the no-leading-space
+    continuation form are all wired and tested. It's opt-in pending
+    the multi-turn fix.
+    """
 
     @abstractmethod
     def doc_to_text(self, doc: dict[str, Any]) -> str:
         """Render the shared context (question + numbered options)."""
 
-    @abstractmethod
     def doc_to_choices(self, doc: dict[str, Any]) -> Sequence[str]:
-        """Per-option continuation strings."""
+        """Per-option continuation strings.
+
+        Default: ``["A", "B", "C", "D"]`` when chat-templated (no
+        leading space — the chat template ends with a newline that
+        separates the assistant turn from the prompt) or
+        ``[" A", " B", " C", " D"]`` for base-model scoring.
+
+        Subclasses override when the task has more or fewer than four
+        options, or when continuations are full strings rather than
+        letters.
+        """
+        del doc
+        letters = ("A", "B", "C", "D")
+        if type(self).chat_templated:
+            return list(letters)
+        return [f" {ll}" for ll in letters]
 
     @abstractmethod
     def doc_to_target(self, doc: dict[str, Any]) -> int:
@@ -166,7 +213,11 @@ class MultipleChoice(Task):
         from anvil.primitives.request import LogLikelihood
 
         ctx = self.doc_to_text(doc)
-        return [LogLikelihood(context=ctx, continuation=c) for c in self.doc_to_choices(doc)]
+        templated = type(self).chat_templated
+        return [
+            LogLikelihood(context=ctx, continuation=c, chat_templated=templated)
+            for c in self.doc_to_choices(doc)
+        ]
 
     def request_to_prediction(
         self, response: Sequence[tuple[float, bool]], doc: dict[str, Any]

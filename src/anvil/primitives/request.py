@@ -48,12 +48,28 @@ class Generate:
 class LogLikelihood:
     """Score a single (context, continuation) pair.
 
-    The engine batches many of these and extracts logprobs at the right offsets
-    in one prefill pass — see ``engine.loglikelihood``.
+    The engine batches many of these and extracts logprobs at the right
+    offsets in one prefill pass — see ``engine.loglikelihood``.
+
+    Attributes:
+        context: the prompt the model conditions on.
+        continuation: the text whose log-probability under
+            ``P(continuation | context)`` is returned.
+        chat_templated: when True, the engine wraps ``context`` as a
+            single user message and applies the model's chat template
+            (with ``add_generation_prompt=True``) before encoding. The
+            continuation is scored as the assistant turn's first tokens.
+            This is the lm-evaluation-harness ``--apply_chat_template``
+            shape and matches published baselines for instruct-tuned
+            models. Default False keeps backward-compat for base-model
+            scoring (raw prompt, no template). See design §1.3 / §6.6 —
+            the chat-template-missing-on-loglikelihood failure mode that
+            shifts MMLU/ARC scores by 5–15pp on instruct models.
     """
 
     context: str
     continuation: str
+    chat_templated: bool = False
 
 
 PoolStrategy = Literal["mean", "cls", "last", "max", "none"]

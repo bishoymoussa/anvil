@@ -166,6 +166,32 @@ class HFEngine:
     def _resolve_sampler(self, req: Generate) -> Sampler:
         return req.sampler if req.sampler is not None else Sampler.greedy()
 
+    def _render_chat_context(self, context: str) -> str:
+        """Wrap ``context`` as a user turn and apply the model's chat template.
+
+        Used by :meth:`loglikelihood` when the request's ``chat_templated``
+        flag is set. Mirrors lm-evaluation-harness's
+        ``--apply_chat_template`` shape: one user message containing the
+        full prompt (including any few-shot exemplars), followed by the
+        ``add_generation_prompt`` separator. The continuation is then
+        scored as the assistant turn's first tokens.
+
+        Falls back to the bare context (no template) if the tokenizer
+        doesn't expose ``apply_chat_template`` — base models don't ship
+        one, and the caller's ``chat_templated`` flag is honored as
+        best-effort rather than blocking.
+        """
+        try:
+            return str(
+                self.tokenizer.apply_chat_template(
+                    [{"role": "user", "content": context}],
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+            )
+        except (AttributeError, ValueError, TypeError):
+            return context
+
     # -------------------------------------------------------------- generate
     @torch.inference_mode()
     def generate_logprobs(self, requests: list[Generate], top_k: int = 5) -> list[Generation]:
@@ -284,12 +310,17 @@ class HFEngine:
             return []
 
         # Pre-tokenize all pairs so we know the shapes upfront.
+        # When ``chat_templated`` is set on the request, we wrap the
+        # context as a single user message and apply the model's chat
+        # template (with ``add_generation_prompt=True``) before encoding.
+        # The continuation is then scored as the assistant turn's first
+        # tokens — the published-baseline configuration for instruct
+        # models, addressing lm-eval-harness #1841 by construction.
         pairs: list[tuple[list[int], list[int]]] = []  # (ctx_ids, full_ids)
         for req in requests:
-            ctx_ids = self.tokenizer.encode(req.context, add_special_tokens=False)
-            full_ids = self.tokenizer.encode(
-                req.context + req.continuation, add_special_tokens=False
-            )
+            rendered = self._render_chat_context(req.context) if req.chat_templated else req.context
+            ctx_ids = self.tokenizer.encode(rendered, add_special_tokens=False)
+            full_ids = self.tokenizer.encode(rendered + req.continuation, add_special_tokens=False)
             pairs.append((ctx_ids, full_ids))
 
         results: list[tuple[float, bool]] = []

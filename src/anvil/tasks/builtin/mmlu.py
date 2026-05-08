@@ -114,9 +114,10 @@ class MMLU(MultipleChoice):
         parts.append(_format_doc(question, choices))
         return "\n".join(parts)
 
-    def doc_to_choices(self, doc: dict[str, Any]) -> list[str]:
-        del doc
-        return [f" {letter}" for letter in _LETTERS]
+    # ``doc_to_choices`` inherited from :class:`MultipleChoice` — defaults
+    # to ``["A", "B", "C", "D"]`` under ``chat_templated=True`` (the
+    # published-baseline configuration for instruct-tuned reference
+    # checkpoints) and ``[" A", " B", " C", " D"]`` for base models.
 
     def doc_to_target(self, doc: dict[str, Any]) -> int:
         return int(doc["answer"])
