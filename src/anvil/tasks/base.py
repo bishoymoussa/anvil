@@ -47,6 +47,11 @@ class Task(ABC):
 
     name: ClassVar[str]
     dataset: ClassVar[DatasetSpec]
+    # HF ``datasets.load_dataset(path, name=...)`` config; e.g. cais/mmlu
+    # requires "all", openai/gsm8k requires "main". ``None`` means the
+    # dataset has only a default config and ``load_dataset(path)`` works.
+    dataset_config: ClassVar[str | None] = None
+    dataset_split: ClassVar[str] = "test"
     fewshot_style: ClassVar[FewshotStyle] = "interleaved"
     n_fewshot_default: ClassVar[int] = 0
     metric: ClassVar[Callable[[Any, Any], float] | None] = None

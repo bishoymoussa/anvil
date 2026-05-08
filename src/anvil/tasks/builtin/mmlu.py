@@ -47,6 +47,8 @@ class MMLU(MultipleChoice):
 
     name = "mmlu"
     dataset = "cais/mmlu"
+    dataset_config = "all"
+    dataset_split = "test"
     fewshot_style = "interleaved"
     n_fewshot_default = 5
     metric_name = "accuracy"

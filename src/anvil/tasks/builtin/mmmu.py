@@ -90,6 +90,11 @@ class MMMU(Task):
 
     name = "mmmu"
     dataset = "MMMU/MMMU"
+    # MMMU is laid out per-subject; the validation split is what published
+    # baselines score against. A specific subject-config can be passed
+    # post-instantiation via ``task.dataset_config = 'subject'`` if the
+    # caller wants per-subject runs.
+    dataset_split = "validation"
     fewshot_style = "none"
     n_fewshot_default = 0
     metric_name = "accuracy"

@@ -49,41 +49,27 @@ class EvalRunResult:
     outputs: dict[str, list[Any]]
 
 
-def _split_for(task: Task) -> str:
-    """Return the dataset split this task expects.
-
-    Hard-coded per task because M0 doesn't yet have a metadata layer.
-    """
-    if task.name == "gsm8k":
-        return "test"
-    return "test"
-
-
-def _config_name_for(task: Task) -> str | None:
-    if task.name == "gsm8k":
-        return "main"
-    return None
-
-
 def _iter_docs(task: Task) -> Iterator[dict[str, Any]]:
-    """Stream docs from the task's dataset, applying ``limit`` if set."""
+    """Stream docs from the task's dataset, applying ``limit`` if set.
+
+    Uses :attr:`Task.dataset_config` and :attr:`Task.dataset_split` so each
+    builtin declares its own HF config name (``"main"`` for GSM8K,
+    ``"all"`` for MMLU, …) rather than hard-coding a hack here.
+    """
     # Access via type(...) to bypass mypy's bound-method binding for
     # ClassVar[... | Callable]; runtime semantics identical.
-    spec = type(task).dataset
+    cls = type(task)
+    spec = cls.dataset
+    split = cls.dataset_split
+    config = cls.dataset_config
+
     if isinstance(spec, str) and "/" in spec and not Path(spec).exists():
-        # HF id with optional config name. Use the dataset library directly so we
-        # can pass the config (gsm8k has 'main' / 'socratic').
         from datasets import load_dataset
 
-        cfg = _config_name_for(task)
-        ds = (
-            load_dataset(spec, cfg, split=_split_for(task))
-            if cfg
-            else load_dataset(spec, split=_split_for(task))
-        )
+        ds = load_dataset(spec, config, split=split) if config else load_dataset(spec, split=split)
         rows: Iterable[dict[str, Any]] = (dict(r) for r in ds)
     else:
-        rows = materialize_dataset(spec, split=_split_for(task))
+        rows = materialize_dataset(spec, split=split)
     for yielded, row in enumerate(rows):
         if task.limit is not None and yielded >= task.limit:
             return

@@ -162,6 +162,8 @@ class GSM8K(Task):
 
     name = "gsm8k"
     dataset = "openai/gsm8k"
+    dataset_config = "main"
+    dataset_split = "test"
     fewshot_style = "interleaved"
     n_fewshot_default = 5
     metric_name = "accuracy"
