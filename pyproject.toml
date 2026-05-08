@@ -1,0 +1,190 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "anvil"
+version = "0.0.1"
+description = "A research-first, evaluation-first inference library."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.11"
+authors = [{name = "Anvil contributors"}]
+keywords = ["llm", "evaluation", "reproducibility", "inference"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "torch>=2.4,<3",
+    "transformers>=4.45,<5",
+    "tokenizers>=0.20",
+    "accelerate>=1.0",
+    "pydantic>=2.7,<3",
+    "typer>=0.12",
+    "rich>=13.7",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pyyaml>=6.0",
+    "jinja2>=3.1",
+    "huggingface-hub>=0.26",
+    "datasets>=3.0",
+    "numpy>=1.26,<3",
+    "Pillow>=10.0",
+    "safetensors>=0.4",
+    "filelock>=3.13",
+    "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+vllm = ["vllm==0.20.1"]
+flash-attn = ["flash-attn>=2.6"]
+multimodal = ["av>=12.0", "decord>=0.6", "librosa>=0.10"]
+xgrammar = ["xgrammar>=0.1.10"]
+outlines = ["outlines>=0.1"]
+rocm = ["torch>=2.4,<3"]
+xpu = ["torch>=2.4,<3"]
+dev = [
+    "pytest>=8.0",
+    "pytest-xdist>=3.5",
+    "pytest-cov>=5.0",
+    "ruff>=0.6",
+    "mypy>=1.10",
+    "import-linter>=2.0",
+    "pre-commit>=3.7",
+    "hypothesis>=6.100",
+    "types-PyYAML",
+]
+
+[project.scripts]
+anvil = "anvil.cli.main:app"
+
+[project.urls]
+Homepage = "https://github.com/anvil-project/anvil"
+Issues = "https://github.com/anvil-project/anvil/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/anvil"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/anvil", "tests", "docs", "README.md", "LICENSE"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "TCH"]
+ignore = [
+    "E501",  # line length handled by formatter; long error messages allowed
+    "B008",  # typer uses callable defaults
+    "N818",  # AnvilError is documented; trailing-Error rename would break public API
+    "UP007", # X | None vs Optional[X] — both fine; we prefer modern but don't force on protocols
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["B011", "SIM117"]
+"src/anvil/caas/kb/entries/*.yaml" = []
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+strict = true
+python_version = "3.11"
+files = ["src/anvil"]
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = [
+    "transformers.*",
+    "huggingface_hub.*",
+    "datasets.*",
+    "vllm.*",
+    "accelerate.*",
+    "safetensors.*",
+    "xgrammar.*",
+    "outlines.*",
+    "av.*",
+    "decord.*",
+    "librosa.*",
+    "PIL.*",
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: tests that take more than a few seconds",
+    "requires_network: needs network (HF Hub, etc.) — skipped by default",
+    "requires_gpu: needs a CUDA GPU available",
+    "requires_hf_gated: needs HF_TOKEN with access to gated models (e.g. Llama)",
+    "requires_vllm: needs vllm installed and importable",
+]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "-m", "not requires_network and not requires_gpu and not requires_hf_gated and not requires_vllm and not slow",
+]
+filterwarnings = [
+    "error",
+    "ignore::DeprecationWarning:pydantic.*",
+    "ignore::DeprecationWarning:transformers.*",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["src/anvil"]
+
+[tool.importlinter]
+root_packages = ["anvil"]
+
+[[tool.importlinter.contracts]]
+name = "Layered architecture"
+type = "layers"
+layers = [
+    "anvil.cli | anvil.server",
+    "anvil.tasks",
+    "anvil.models",
+    "anvil.engine",
+    "anvil.primitives",
+]
+
+[[tool.importlinter.contracts]]
+name = "primitives is a leaf"
+type = "forbidden"
+source_modules = ["anvil.primitives"]
+forbidden_modules = [
+    "anvil.engine",
+    "anvil.models",
+    "anvil.tasks",
+    "anvil.cli",
+    "anvil.server",
+    "anvil.manifest",
+    "anvil.caas",
+]
+
+[[tool.importlinter.contracts]]
+name = "metrics is a leaf"
+type = "forbidden"
+source_modules = ["anvil.metrics"]
+forbidden_modules = [
+    "anvil.engine",
+    "anvil.models",
+    "anvil.tasks",
+    "anvil.cli",
+    "anvil.server",
+    "anvil.manifest",
+    "anvil.caas",
+]
+
+# Note: anvil.plugins.v1 is intentionally NOT a leaf — it re-exports the
+# registration entry points (register_model_impl, etc.) so third-party
+# plugins can stay decoupled from the rest of the codebase. The leaf
+# discipline applies to the third-party plugins themselves, which Anvil
+# cannot enforce from inside its own repo.
