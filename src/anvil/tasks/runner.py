@@ -164,11 +164,11 @@ def run_eval(
     sampler_field: dict[str, Any] | None = None
 
     for task in tasks:
-        if task.request_type not in ("Generate", "LogLikelihood"):
+        if task.request_type not in ("Generate", "LogLikelihood", "Embed", "Custom"):
             raise TaskError(
                 f"task {task.name!r}: request_type={task.request_type!r} not yet "
-                "supported. M1 ships Generate + LogLikelihood; Embed/Classify/Custom "
-                "land in M5 (design §16.10)."
+                "supported. M5 ships Generate / LogLikelihood / Embed / Custom; "
+                "Classify lands in v0.5 (design §16.10)."
             )
         _log.info(
             "running task %s (n_fewshot=%d, limit=%s, type=%s)",
@@ -195,6 +195,7 @@ def run_eval(
                 per_doc_counts.append(1)
 
         # Dispatch.
+        flat_responses: list[Any]
         if task.request_type == "Generate":
             for fr in flat_requests:
                 if not isinstance(fr, Generate):
@@ -208,8 +209,8 @@ def run_eval(
                 if req.sampler is not None and sampler_field is None:
                     sampler_field = req.sampler.to_manifest_field()
                     break
-            flat_responses: list[Any] = _batched_generate(engine, generate_requests, batch_size=2)
-        else:  # LogLikelihood
+            flat_responses = _batched_generate(engine, generate_requests, batch_size=2)
+        elif task.request_type == "LogLikelihood":
             from anvil.primitives.request import LogLikelihood
 
             ll_requests: list[LogLikelihood] = list(flat_requests)
@@ -220,6 +221,30 @@ def run_eval(
                         f"non-LogLikelihood request appeared: {type(fr).__name__}"
                     )
             flat_responses = list(engine.loglikelihood(ll_requests))
+        elif task.request_type == "Embed":
+            from anvil.primitives.request import Embed as _Embed
+
+            embed_requests: list[_Embed] = list(flat_requests)
+            for fr in embed_requests:
+                if not isinstance(fr, _Embed):
+                    raise TaskError(
+                        f"task {task.name!r}: request_type='Embed' but a non-Embed "
+                        f"request appeared: {type(fr).__name__}"
+                    )
+            flat_responses = list(engine.embed(embed_requests))
+        else:  # Custom
+            from anvil.primitives.request import Custom as _Custom
+
+            custom_requests: list[_Custom] = list(flat_requests)
+            flat_responses = []
+            for fr in custom_requests:
+                if not isinstance(fr, _Custom):
+                    raise TaskError(
+                        f"task {task.name!r}: request_type='Custom' but a non-Custom "
+                        f"request appeared: {type(fr).__name__}"
+                    )
+                inputs = list(fr.inputs or [])
+                flat_responses.extend(engine.custom(fr.fn, inputs))
 
         # Re-group flat responses per-doc.
         per_doc_responses: list[Any] = []

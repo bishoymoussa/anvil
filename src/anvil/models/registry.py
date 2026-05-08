@@ -131,18 +131,53 @@ def load_custom(
     model_class: type[Any] | None = None,
     tokenizer_class: type[Any] | None = None,
     revision: str | None = None,
+    dtype: str | None = None,
+    device_map: str | None = None,
+    engine_args: dict[str, Any] | None = None,
 ) -> LoadedModel:
     """Load a non-causal model via the slow path (design §6.7).
 
-    Currently a stub: full custom-model support requires the embed/classify
-    paths that land in M5. M0 raises a clear error pointing at the design
-    section.
+    The ``model_class`` is whatever transformers (or third-party) class
+    is appropriate for the architecture: ``AutoModel`` for generic
+    encoders, ``AutoModelForSequenceClassification`` for classifiers,
+    or — for non-text-domain models like RNA-FM — the project's own
+    class import. ``trust_remote_code=True`` is enabled because most
+    domain-specific models ship custom modeling code; v0.5 will gate
+    this behind explicit user consent (per §7.7 KB
+    ``trust_remote_code_required``).
+
+    Args:
+        model_id: HF model id or local path.
+        model_class: a class with ``.from_pretrained``. Defaults to
+            ``transformers.AutoModel``.
+        tokenizer_class: a class with ``.from_pretrained``. Defaults to
+            ``transformers.AutoTokenizer``.
+        revision: optional model revision pin.
+        dtype: ``"bfloat16"``, ``"float16"``, ``"float32"``, or ``None``.
+        device_map: passed through to ``from_pretrained`` (default
+            ``"auto"``).
+        engine_args: backend-specific extras; reserved for v0.5.
+
+    Example:
+        >>> from transformers import AutoModel  # doctest: +SKIP
+        >>> m = anvil.load_custom(  # doctest: +SKIP
+        ...     model_id="multimolecule/rnafm",
+        ...     model_class=AutoModel,
+        ... )
     """
-    del model_class, tokenizer_class, revision
-    raise ConfigError(
-        f"load_custom({model_id!r}, ...) is M5 work (design §16.10); use "
-        "anvil.load(...) for causal LMs in M0."
+    from anvil.engine._hf.embed_runner import HFEmbedEngine
+
+    eng = HFEmbedEngine(
+        model_id=model_id,
+        revision=revision,
+        dtype=dtype,
+        device_map=device_map or "auto",
+        model_class=model_class,
+        tokenizer_class=tokenizer_class,
+        engine_args=engine_args,
     )
+    _log.info("loaded custom model %s via HFEmbedEngine", model_id)
+    return LoadedModel(engine=eng, model_id=model_id)
 
 
 __all__ = ["load", "load_custom", "register_model_impl", "LoadedModel"]

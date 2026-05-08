@@ -127,7 +127,32 @@ class StubEngine:
         return [-len(r) * 0.1 for r in requests]
 
     def embed(self, requests: list[Embed]) -> list[EmbedResult]:
-        raise NotImplementedError
+        """Synthesize a deterministic 8-dim embedding per request.
+
+        We hash the input string and project it into 8 floats so different
+        inputs produce different vectors but the same input always produces
+        the same vector — useful for the RNA-style integration test where
+        the eventual metric (Spearman, exact-match against a target) needs
+        a stable input → embedding map.
+        """
+        import torch as _torch
+
+        out: list[EmbedResult] = []
+        for req in requests:
+            payload = str(req.input).encode("utf-8")
+            digest = hashlib.sha256(payload).digest()[:32]
+            # Map each byte to a float in [-1, 1].
+            floats = [(b - 128) / 128.0 for b in digest]
+            emb = _torch.tensor(floats[:8], dtype=_torch.float32)
+            out.append(
+                EmbedResult(
+                    embedding=emb,
+                    layer=req.layer,
+                    pool=req.pool,
+                    input_token_count=len(payload),
+                )
+            )
+        return out
 
     def classify(self, requests: list[Classify]) -> list[ClassifyResult]:
         raise NotImplementedError
