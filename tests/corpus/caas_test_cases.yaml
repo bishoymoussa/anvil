@@ -1,0 +1,204 @@
+# CaaS test corpus (design §16.11).
+#
+# Hand-written. Each case has the original error/scenario, the expected
+# KB match, the expected fix, and the expected outcome (resolved |
+# surfaced_correctly | false_positive | unmatched).
+#
+# v0 ships 10 cases: 5 verbatim from §16.11 + 5 derived from §1
+# gap-analysis citations. We will not extrapolate further until each new
+# case has (a) a real GitHub issue link and (b) a reproduction.
+
+# ============================================================================
+# Cases 1-5: verbatim from design §16.11.
+# ============================================================================
+
+- name: tp_3_on_32_head_llama
+  scenario_setup: |
+    engine = vllm
+    model = meta-llama/Llama-3.1-8B-Instruct
+    args = {tensor_parallel_size: 3}
+  context:
+    error: "Total number of attention heads (32) must be divisible by tensor parallel size (3)"
+    model_id: "meta-llama/Llama-3.1-8B-Instruct"
+    engine_name: "vllm"
+    engine_version: "0.20.1"
+    available_gpus: 4
+    num_attention_heads: 32
+  expected_match: tp_attn_heads_divisibility
+  expected_fix:
+    type: set_engine_flag
+    flag: "--tensor-parallel-size"
+    value: 4   # largest divisor of 32 ≤ available_gpus=4
+  expected_outcome: resolved
+
+- name: llama3_instruct_no_chat_template
+  scenario_setup: |
+    model = meta-llama/Llama-3.1-8B-Instruct
+    apply_chat_template = false
+  context:
+    error: "no_chat_template_applied"
+    model_id: "meta-llama/Llama-3.1-8B-Instruct"
+    engine_name: "anvil"
+    engine_version: "0.0.1"
+  expected_match: instruct_model_no_chat_template_warning
+  expected_fix:
+    type: set_engine_flag
+    flag: "--apply-chat-template"
+    value: "true"
+  expected_outcome: resolved
+
+- name: qwen_vl_3b_oom_default_pixels
+  scenario_setup: |
+    model = Qwen/Qwen2.5-VL-3B-Instruct
+    dataset_largest_image: [1280, 768]
+  context:
+    error: "memory profiling expects 256 GB"
+    model_id: "Qwen/Qwen2.5-VL-3B-Instruct"
+    engine_name: "vllm"
+    engine_version: "0.20.1"
+    max_image_pixels: 1003520     # 1280 * 768 ≈ 983,040; round to 28*28 buckets
+  expected_match: qwen_vl_max_pixels_default_too_high
+  expected_fix:
+    type: set_engine_flag
+    flag: "--mm-processor-kwargs"
+  expected_outcome: resolved
+
+- name: glm47_requires_transformers_main
+  scenario_setup: |
+    model = glm-4.7-flash
+    transformers_version: "4.45.0"
+  context:
+    error: "transformers does not recognize glm4_moe_lite"
+    model_id: "glm-4.7-flash"
+    engine_name: "transformers"
+    engine_version: "4.45.0"
+  expected_match: null   # surfaces, does not auto-fix
+  expected_outcome: surfaced_correctly
+  surfaced_message_contains:
+    - "transformers"
+    - "review"
+
+- name: cuda_12_wheel_on_cuda_13_host
+  scenario_setup: |
+    vllm_built_against: cuda12
+    host_cuda: 13.0
+  context:
+    error: "ImportError: libcudart.so.12: cannot open shared object file"
+    model_id: ""
+    engine_name: "vllm"
+    engine_version: "0.20.1"
+  expected_match: cuda_libcudart_version_mismatch
+  expected_fix:
+    type: give_up   # never auto-installs torch
+  expected_outcome: surfaced_correctly
+  surfaced_message_contains:
+    - "matching wheel"
+    - "cuXXX"
+
+# ============================================================================
+# Cases 6-10: derived from gap-analysis citations in design §1.
+# Each cites a real GitHub issue we can reproduce.
+# ============================================================================
+
+- name: llama3_eot_runaway_at_max_tokens
+  # vLLM #4180, #4297, #5395: Llama-3-Instruct emits <|eot_id|> (128009) as
+  # the assistant turn terminator, but vLLM doesn't add it to stop_token_ids
+  # by default. Generations run to max_tokens unless the user adds it manually.
+  scenario_setup: |
+    model = meta-llama/Llama-3.1-8B-Instruct
+    sampler.stop_token_ids = []
+    observation = "all generations hit max_tokens; outputs include <|eot_id|>"
+  context:
+    error: "generation_length >= max_tokens"
+    model_id: "meta-llama/Llama-3.1-8B-Instruct"
+    engine_name: "vllm"
+    engine_version: "0.20.1"
+  expected_match: llama3_eot_runaway
+  expected_fix:
+    type: set_sampling_param
+    name: stop_token_ids
+    value: [128009]
+  expected_outcome: resolved
+
+- name: flash_attn_compile_fail_on_volta
+  # vLLM #9060: FlashAttention requires sm80+ (Ampere). V100 (sm70) cannot
+  # build the kernel; the import fails at engine construction.
+  scenario_setup: |
+    gpu = NVIDIA V100
+    engine = vllm
+  context:
+    error: "FATAL: FlashAttention requires building with sm version sm80-sm90 but"
+    model_id: "meta-llama/Llama-3.1-8B-Instruct"
+    engine_name: "vllm"
+    engine_version: "0.20.1"
+  expected_match: flash_attention_sm_unsupported
+  expected_fix:
+    type: set_env_var
+    name: VLLM_ATTENTION_BACKEND
+    value: XFORMERS
+  expected_outcome: resolved
+
+- name: numpy_2_after_transformers_pin
+  # NumPy 2.0 ABI break (mid-2024). transformers / torch wheels compiled
+  # against numpy<2 fail to import with ``A module that was compiled using
+  # NumPy 1.x cannot be run in NumPy 2``. Anvil refuses to auto-pip-install
+  # without --ci --allow-install (§7.5); the action is recorded so the user
+  # can re-run after manually installing.
+  scenario_setup: |
+    pip_state = "transformers 4.40.0 + numpy 2.0.0"
+  context:
+    error: "A module that was compiled using NumPy 1.x cannot be run in NumPy 2.0.0"
+    model_id: ""
+    engine_name: "transformers"
+    engine_version: "4.40.0"
+  expected_match: numpy_2x_abi_break
+  expected_fix:
+    type: install_package
+    name: numpy
+    value: "<2"
+  # Without --allow-install, the action records but does not apply.
+  expected_outcome: surfaced_correctly
+  surfaced_message_contains:
+    - "NumPy 2"
+
+- name: vllm_v0_8_generation_config_silently_overrides_sampler
+  # vLLM v0.8.0 PR #12622: vllm started reading sampler defaults from
+  # generation_config.json by default, which silently overrode user-supplied
+  # SamplingParams. The CaaS fix sets --generation-config=vllm to force
+  # neutral defaults.
+  scenario_setup: |
+    engine = vllm
+    vllm_version = 0.8.0
+    sampler.temperature = 0.0
+    observation = "outputs differ from v0.7.x runs by 12 GSM8K points"
+  context:
+    error: "generation_config.json defaults applied"
+    model_id: "meta-llama/Llama-3.1-8B-Instruct"
+    engine_name: "vllm"
+    engine_version: "0.8.0"
+  expected_match: generation_config_overrides_sampler_v0_8
+  expected_fix:
+    type: set_engine_flag
+    flag: "--generation-config"
+    value: "vllm"
+  expected_outcome: resolved
+
+- name: gsm8k_flexible_extract_first_number
+  # lm-evaluation-harness #2278, #3214: the GSM8K "flexible-extract" filter
+  # picks the FIRST number in the output, not the last. For chain-of-thought
+  # models this scores intermediate reasoning numbers as final answers.
+  # Anvil refuses the filter (KB enforces strict-match).
+  scenario_setup: |
+    task_yaml = "gsm8k.yaml"
+    filter = "flexible-extract"
+  context:
+    error: "task_name: gsm8k\nfilter: flexible-extract"
+    model_id: "meta-llama/Llama-3.1-8B-Instruct"
+    engine_name: "anvil"
+    engine_version: "0.0.1"
+  expected_match: gsm8k_flexible_extract_picks_first_number
+  expected_fix:
+    type: edit_yaml
+    name: filter
+    value: "strict-match"
+  expected_outcome: resolved

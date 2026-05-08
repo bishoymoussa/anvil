@@ -1,0 +1,62 @@
+# Tokenization failures (design §16.7).
+# These are the highest-impact silent-failure modes per §1.3.
+
+- id: instruct_model_no_chat_template_warning
+  category: tokenization
+  engines:
+    - engine: anvil
+      spec: ">=0"
+  signatures:
+    - "model_id_matches: .*-(Instruct|instruct|Chat|chat|IT|it)$"
+    - "no_chat_template_applied"
+  fix:
+    type: set_engine_flag
+    flag: "--apply-chat-template"
+    value: "true"
+  severity: blocking
+  references:
+    - "https://github.com/EleutherAI/lm-evaluation-harness/issues/1841"
+  human_message: |
+    Loaded an Instruct/Chat model without a chat template. This silently
+    degrades to base-model quality. Anvil refuses to run instruct models
+    without a chat template. Use ChatTemplate.from_model() or pass
+    --no-chat-template to override (NOT recommended).
+
+- id: llama3_eot_runaway
+  category: tokenization
+  engines:
+    - engine: any
+      spec: ">=0"
+  signatures:
+    - "model_id_matches: meta-llama/(Meta-)?Llama-3.*-Instruct"
+    - "generation_length >= max_tokens"
+  fix:
+    type: set_sampling_param
+    name: stop_token_ids
+    value: [128009]
+  severity: blocking
+  references:
+    - "https://github.com/vllm-project/vllm/issues/4180"
+    - "https://github.com/vllm-project/vllm/issues/4297"
+  human_message: |
+    Llama-3-Instruct emits <|eot_id|> (128009) as the assistant turn
+    terminator, but vLLM doesn't add it to stop_token_ids by default.
+    Adding it explicitly.
+
+- id: chat_template_not_found_v044
+  category: tokenization
+  engines:
+    - engine: any
+      spec: ">=0"
+  signatures:
+    - "default chat template is no longer allowed"
+    - "Cannot use chat template functions because tokenizer.chat_template is not set"
+  fix:
+    type: set_engine_flag
+    flag: "--chat-template"
+    value_strategy: lookup_from_model_card
+  severity: blocking
+  references: []
+  human_message: |
+    transformers v4.44+ rejects the default chat template. Looking up
+    a compatible template from the model card or examples/chat_templates.

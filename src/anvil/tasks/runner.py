@@ -135,6 +135,7 @@ def run_eval(
     tasks: list[Task],
     output_dir: Path | None = None,
     extra_manifest: dict[str, Any] | None = None,
+    caas_log: Any = None,
 ) -> EvalRunResult:
     """Run all ``tasks`` against ``engine`` and emit a manifest.
 
@@ -145,6 +146,11 @@ def run_eval(
             ``output_dir/manifest.json``. The directory is created if needed.
         extra_manifest: optional additional fields merged into the manifest's
             ``smoke_test`` block — used by CaaS in M3+ to record sentinel data.
+        caas_log: an optional :class:`anvil.caas.AuditLog` whose records
+            flow into the manifest's ``caas_log`` field. The runner does
+            not engage CaaS itself — that happens before the call (typically
+            in :func:`anvil.tasks.public.eval`); the runner only embeds the
+            already-recorded actions in the signed manifest.
 
     Returns:
         :class:`EvalRunResult` with scores, the signed manifest, and per-task
@@ -242,6 +248,10 @@ def run_eval(
         )
 
     ended_at = _dt.datetime.now(_dt.UTC).isoformat()
+
+    # Pull CaaS records into the manifest's caas_log if a log was passed in.
+    caas_records = caas_log.to_list() if caas_log is not None else []
+
     manifest = Manifest(
         anvil_version=_anvil_version,
         engine=_engine_dict(engine),
@@ -252,7 +262,7 @@ def run_eval(
         tasks=task_infos,
         scores=scores,
         smoke_test={"samples": 0, "outcome": "skipped"} | (extra_manifest or {}),
-        caas_log=[],
+        caas_log=caas_records,
         hardware=_hardware_info(),
         started_at=started_at,
         ended_at=ended_at,

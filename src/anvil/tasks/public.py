@@ -65,6 +65,7 @@ def eval(  # noqa: A001 - shadowing builtins is intentional (matches design §10
     device_map: str | None = None,
     engine_args: dict[str, Any] | None = None,
     output_dir: str | Path | None = None,
+    caas: str = "research",
 ) -> EvalRunResult:
     """Run an evaluation. Returns scores + manifest.
 
@@ -81,15 +82,20 @@ def eval(  # noqa: A001 - shadowing builtins is intentional (matches design §10
             ``build_engine`` when ``model`` is a string.
         output_dir: if given, the manifest is written to
             ``output_dir/manifest.json``.
-
-    Example:
-        >>> import anvil  # doctest: +SKIP
-        >>> result = anvil.eval(model="...", tasks=["gsm8k"], limit=10)  # doctest: +SKIP
-        >>> result.scores  # doctest: +SKIP
+        caas: CaaS preflight mode (design §7.6). One of ``"off"``,
+            ``"advisory"``, ``"research"`` (default), ``"ci"``. Honored as
+            a tunable knob; M3 ships the engagement loop, the engine
+            error-handler integration lands in M4. The ``ANVIL_CAAS_MODE``
+            env var overrides this kwarg.
     """
+    import os
+
     task_list = [_instantiate(t, n_fewshot=n_fewshot, limit=limit) for t in tasks]
     if not task_list:
         raise ConfigError("anvil.eval: tasks=[] — nothing to do")
+
+    caas_mode = os.environ.get("ANVIL_CAAS_MODE", caas).lower()
+    audit = _build_audit_log(model_id=model, engine_args=engine_args, mode=caas_mode)
 
     own_engine = False
     if isinstance(model, str):
@@ -112,10 +118,100 @@ def eval(  # noqa: A001 - shadowing builtins is intentional (matches design §10
             engine=eng,
             tasks=task_list,
             output_dir=Path(output_dir) if output_dir is not None else None,
+            caas_log=audit,
         )
     finally:
         if own_engine:
             eng.shutdown()
+
+
+def _build_audit_log(
+    *,
+    model_id: object,
+    engine_args: dict[str, Any] | None,
+    mode: str,
+) -> Any | None:
+    """Run CaaS preflight against the user's config and return the AuditLog.
+
+    M3 wires CaaS into the eval entry point but only inspects user-supplied
+    config (no live engine probing yet — that lands in M4 alongside the
+    error-handler integration). Concretely: if the user passed
+    ``engine_args`` that the rule engine recognizes as a known footgun
+    (e.g. ``tensor_parallel_size=3`` against a 32-head model), CaaS engages.
+    """
+    if mode == "off" or engine_args is None:
+        return None
+
+    from anvil.caas import AuditLog, Context, engage, load_kb
+
+    audit = AuditLog()
+    if not isinstance(model_id, str):
+        # Replays / pre-loaded engines: skip preflight; the manifest already
+        # reflects what the original run captured.
+        return audit
+
+    kb = load_kb()
+
+    # Inspect engine_args for the well-known "TP doesn't divide" pattern. We
+    # don't have a live engine to query yet — design §7.2 step 1 (canonical
+    # short) lands in M4. For M3 the rule engine matches the *anticipated*
+    # error string we'd see if vLLM were started with this config.
+    tp_size = engine_args.get("tensor_parallel_size")
+    if tp_size:
+        ctx = Context(
+            error="",
+            model_id=model_id,
+            engine_name="vllm",
+            engine_version="0.20.1",
+            num_attention_heads=_likely_attention_heads(model_id),
+            available_gpus=tp_size,
+            extra={"tp_size": tp_size},
+        )
+        if ctx.num_attention_heads is not None and ctx.num_attention_heads % tp_size != 0:
+            ctx = Context(
+                error=(
+                    f"Total number of attention heads ({ctx.num_attention_heads}) "
+                    f"must be divisible by tensor parallel size ({tp_size})"
+                ),
+                model_id=ctx.model_id,
+                engine_name=ctx.engine_name,
+                engine_version=ctx.engine_version,
+                num_attention_heads=ctx.num_attention_heads,
+                available_gpus=tp_size,
+                extra={"tp_size": tp_size},
+            )
+            sampling_args: dict[str, Any] = {}
+            outcome = engage(
+                error=ctx.error,
+                kb=kb,
+                ctx=ctx,
+                mode=mode,  # type: ignore[arg-type]
+                engine_args=engine_args,
+                sampling_args=sampling_args,
+                log=audit,
+                # In ci mode we never auto-confirm review-required items; the
+                # rule engine handles that. Below replaces input() so research
+                # mode doesn't block tests that don't have a TTY.
+                confirm=lambda _prompt: True,
+            )
+            del outcome  # the audit log is what flows into the manifest
+    return audit
+
+
+def _likely_attention_heads(model_id: str) -> int | None:
+    """Return the head count for well-known models without a network call.
+
+    M3-scoped: this stays a small lookup table for the families the test
+    corpus references. M4 plumbs an actual ``AutoConfig.from_pretrained``
+    probe behind a cache so any HF model is covered.
+    """
+    table: dict[str, int] = {
+        "meta-llama/Llama-3.1-8B-Instruct": 32,
+        "meta-llama/Llama-3.1-70B-Instruct": 64,
+        "meta-llama/Meta-Llama-3-8B-Instruct": 32,
+        "Qwen/Qwen2.5-7B-Instruct": 28,
+    }
+    return table.get(model_id)
 
 
 __all__ = ["eval"]

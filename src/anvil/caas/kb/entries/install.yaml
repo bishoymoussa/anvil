@@ -1,0 +1,58 @@
+# Install / runtime-environment failures (design §16.7).
+# Each entry must have at least one citation and an `engines:` constraint.
+
+- id: cuda_libcudart_version_mismatch
+  category: install
+  engines:
+    - engine: vllm
+      spec: ">=0.10"
+  signatures:
+    - "libcudart\\.so\\.\\d+: cannot open shared object file"
+    - "ImportError: libcudart"
+  fix:
+    type: give_up   # surface; do not auto-fix driver/CUDA mismatches
+  severity: blocking
+  references:
+    - "https://github.com/vllm-project/vllm/issues/28669"
+  human_message: |
+    Your installed vLLM was built against a different CUDA major version
+    than what's available on the host. Install the matching wheel:
+        uv pip install -U vllm --extra-index-url https://download.pytorch.org/whl/cuXXX
+    where cuXXX matches `nvidia-smi` output.
+
+- id: flash_attention_sm_unsupported
+  category: install
+  engines:
+    - engine: any
+      spec: ">=0"
+  signatures:
+    - "FlashAttention requires building with sm version sm80-sm90"
+    - "FATAL: FlashAttention.* but"
+  fix:
+    type: set_env_var
+    name: VLLM_ATTENTION_BACKEND
+    value: XFORMERS
+  severity: warning
+  references:
+    - "https://github.com/vllm-project/vllm/issues/9060"
+  human_message: |
+    Your GPU is older than Ampere; FlashAttention won't compile.
+    Falling back to XFormers backend. Expect ~20–40% throughput loss.
+
+- id: numpy_2x_abi_break
+  category: install
+  engines:
+    - engine: any
+      spec: ">=0"
+  signatures:
+    - "A module that was compiled using NumPy 1\\.x cannot be run in NumPy 2"
+    - "numpy\\.dtype size changed"
+  fix:
+    type: install_package
+    name: numpy
+    value: "<2"
+  severity: blocking
+  requires_user_consent: true
+  references: []
+  human_message: |
+    NumPy 2.x ABI break detected. Pin numpy<2 or upgrade transformers.

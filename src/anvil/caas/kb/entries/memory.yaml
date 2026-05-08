@@ -1,0 +1,63 @@
+# Memory / parallelism / multimodal-budget failures (design §16.7).
+# The manuscript groups TP-divisibility and Qwen-VL-pixel issues here even
+# though their `category:` differs — we follow the §16.7 layout verbatim.
+
+- id: tp_attn_heads_divisibility
+  category: parallelism
+  engines:
+    - engine: vllm
+      spec: ">=0.4"
+  signatures:
+    - "Total number of attention heads \\((\\d+)\\) must be divisible by tensor parallel size \\((\\d+)\\)"
+  fix:
+    type: set_engine_flag
+    flag: "--tensor-parallel-size"
+    value_strategy: largest_divisor_of_attn_heads
+  severity: blocking
+  references:
+    - "https://github.com/vllm-project/vllm/issues/414"
+    - "https://github.com/vllm-project/vllm/issues/596"
+    - "https://github.com/vllm-project/vllm/issues/1041"
+    - "https://github.com/vllm-project/vllm/issues/11797"
+  human_message: |
+    num_attention_heads={heads} is not divisible by --tensor-parallel-size={tp}.
+    Largest divisor of {heads} that's ≤ available_gpus is {fix_value}.
+
+- id: kv_cache_oom_high_max_model_len
+  category: memory
+  engines:
+    - engine: any
+      spec: ">=0"
+  signatures:
+    - "No available memory for the cache blocks"
+    - "Try increasing.*gpu_memory_utilization|reducing.*max_model_len"
+  fix:
+    type: set_engine_flag
+    flag: "--max-model-len"
+    value_strategy: max_input_token_length_plus_max_output
+  severity: blocking
+  references: []
+  human_message: |
+    KV cache won't fit. Lowering --max-model-len to fit your dataset's
+    actual longest input ({max_in}) plus generation budget ({max_out}).
+
+- id: qwen_vl_max_pixels_default_too_high
+  category: multimodal
+  engines:
+    - engine: any
+      spec: ">=0"
+  signatures:
+    - "model_id_matches: Qwen/Qwen[2-9](\\.[0-9]+)?-VL-.*"
+    - "memory profiling expects.*256.*GB|expected.*\\d{3,}.*GB"
+  fix:
+    type: set_engine_flag
+    flag: "--mm-processor-kwargs"
+    value_strategy: max_pixels_from_dataset
+  severity: blocking
+  references:
+    - "https://github.com/vllm-project/vllm/issues/27706"
+    - "https://github.com/vllm-project/vllm/issues/14184"
+    - "https://github.com/vllm-project/vllm/issues/15364"
+  human_message: |
+    Qwen-VL family defaults to max_pixels=12,845,056. Your dataset's
+    largest image is {max_dim}. Setting max_pixels to {fix_value}.

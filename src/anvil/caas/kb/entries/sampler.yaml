@@ -1,0 +1,38 @@
+# Sampler / generation_config failures (design §16.7).
+
+- id: generation_config_overrides_sampler_v0_8
+  category: sampler
+  engines:
+    - engine: vllm
+      spec: ">=0.8.0"
+  signatures:
+    - "generation_config.json defaults applied"
+    - "sampler_source != 'explicit' AND output_differs_from_user_config"
+  fix:
+    type: set_engine_flag
+    flag: "--generation-config"
+    value: "vllm"
+  severity: warning
+  references: []
+  human_message: |
+    vLLM v0.8.0+ reads sampler defaults from generation_config.json by
+    default, which silently overrides your Sampler. Setting
+    --generation-config=vllm to force neutral defaults.
+
+- id: reasoning_model_max_tokens_too_low
+  category: sampler
+  engines:
+    - engine: any
+      spec: ">=0"
+  signatures:
+    - "model_id_matches: .*(R1|QwQ|o1|deepseek-r1|reasoning).*"
+    - "max_tokens < 4096"
+  fix:
+    type: set_sampling_param
+    name: max_tokens
+    value: 32768
+  severity: warning
+  references: []
+  human_message: |
+    Reasoning models (R1, QwQ, o1) emit long <think> blocks before the
+    final answer. max_tokens={current} will truncate. Recommended: 32768.

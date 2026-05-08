@@ -1,0 +1,57 @@
+# Model-loading failures (design §16.7).
+
+- id: trust_remote_code_required
+  category: model_loading
+  engines:
+    - engine: any
+      spec: ">=0"
+  signatures:
+    - "requires you to execute the configuration file"
+    - "set trust_remote_code=True"
+  fix:
+    type: set_engine_flag
+    flag: "--trust-remote-code"
+    value: "true"
+  severity: review-required
+  requires_user_consent: true   # ALWAYS. Code-execution surface.
+  references:
+    - "https://github.com/vllm-project/vllm/issues/354"
+    - "https://github.com/vllm-project/vllm/issues/5244"
+  human_message: |
+    This model loads custom Python code from its repo. We will NOT enable
+    --trust-remote-code without your explicit approval. Review the model
+    card and confirm you trust the source.
+
+- id: bf16_nan_on_volta
+  category: model_loading
+  engines:
+    - engine: any
+      spec: ">=0"
+  signatures:
+    - "NaN in.*bf16|bfloat16.*not supported"
+  fix:
+    type: set_engine_flag
+    flag: "--dtype"
+    value: "float16"
+  severity: blocking
+  references: []
+  human_message: |
+    Volta GPUs (V100) don't support bfloat16. Switching to fp16.
+
+- id: quantization_method_mismatch
+  category: model_loading
+  engines:
+    - engine: any
+      spec: ">=0"
+  signatures:
+    - "quantization method.*does not match.*config\\.json"
+    - "Unknown quantization type"
+  fix:
+    type: set_engine_flag
+    flag: "--quantization"
+    value_strategy: lookup_from_model_card
+  severity: blocking
+  references: []
+  human_message: |
+    The --quantization flag does not match the model's quantization_config
+    in config.json. Detected: {detected}. Set explicitly.

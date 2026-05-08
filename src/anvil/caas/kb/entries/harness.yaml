@@ -1,0 +1,22 @@
+# Eval-harness failures (design §16.7).
+
+- id: gsm8k_flexible_extract_picks_first_number
+  category: harness
+  engines:
+    - engine: anvil
+      spec: ">=0"
+  signatures:
+    - "task_name: gsm8k"
+    - "filter: flexible-extract"
+  fix:
+    type: edit_yaml
+    name: filter
+    value: "strict-match"
+  severity: warning
+  references:
+    - "https://github.com/EleutherAI/lm-evaluation-harness/issues/2278"
+    - "https://github.com/EleutherAI/lm-evaluation-harness/issues/3214"
+  human_message: |
+    GSM8K's flexible-extract filter picks the FIRST number in the output,
+    not the last. For chain-of-thought models this scores intermediate
+    reasoning numbers as final answers. Switching to strict-match.
