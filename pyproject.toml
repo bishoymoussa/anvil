@@ -148,7 +148,8 @@ root_packages = ["anvil"]
 name = "Layered architecture"
 type = "layers"
 layers = [
-    "anvil.cli | anvil.server",
+    "anvil.cli",
+    "anvil.server",
     "anvil.tasks",
     "anvil.models",
     "anvil.engine",
