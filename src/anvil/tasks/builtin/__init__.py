@@ -12,5 +12,6 @@ from __future__ import annotations
 from anvil.tasks.builtin import gsm8k as _gsm8k  # noqa: F401
 from anvil.tasks.builtin import humaneval as _humaneval  # noqa: F401
 from anvil.tasks.builtin import mmlu as _mmlu  # noqa: F401
+from anvil.tasks.builtin import mmmu as _mmmu  # noqa: F401
 
 __all__: list[str] = []

@@ -119,7 +119,11 @@ def engage(
             and the match couldn't be applied. Other modes return an
             ``unresolved`` outcome and let the caller decide.
     """
-    audit = log or AuditLog()
+    # NOTE: ``log if log is not None else AuditLog()`` rather than
+    # ``log or AuditLog()`` — an empty AuditLog has __len__ == 0 and would
+    # be replaced by a fresh instance, silently dropping records made
+    # against the caller's log.
+    audit = log if log is not None else AuditLog()
 
     if mode == "off":
         return PreflightOutcome(

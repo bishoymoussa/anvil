@@ -69,6 +69,28 @@ def build_engine(
         _log.info("engine='auto' resolved to %r", engine)
 
     if engine == "hf":
+        if _is_multimodal(model_id, revision=revision):
+            from anvil.engine._hf.mm_runner import (
+                HFVLMEngine,
+                apply_qwen_vl_defaults,
+                is_qwen_vl,
+            )
+
+            arch = _peek_architecture(model_id, revision=revision)
+            effective_engine_args = dict(engine_args)
+            if is_qwen_vl(arch):
+                effective_engine_args = apply_qwen_vl_defaults(effective_engine_args)
+                _log.info(
+                    "Qwen-VL fast-path detected (%s); applying max_pixels/min_pixels defaults",
+                    arch,
+                )
+            return HFVLMEngine(
+                model_id=model_id,
+                revision=revision,
+                dtype=dtype,
+                device_map=device_map or "auto",
+                engine_args=effective_engine_args,
+            )
         from anvil.engine._hf.runner import HFEngine
 
         return HFEngine(
@@ -80,6 +102,61 @@ def build_engine(
         )
 
     raise ConfigError(f"unknown engine choice: {engine!r}")
+
+
+def _peek_architecture(model_id: str, *, revision: str | None = None) -> str | None:
+    """Cheap lookup of ``config.architectures[0]`` without weight download.
+
+    Used by the factory to route VLMs vs causal LMs and by the Qwen-VL
+    fast-path detector. Returns ``None`` on lookup failure (treat as
+    not-a-VLM and fall through).
+    """
+    try:
+        from transformers import AutoConfig
+
+        cfg = AutoConfig.from_pretrained(model_id, revision=revision)
+        archs = getattr(cfg, "architectures", None) or []
+        if archs:
+            return str(archs[0])
+        # Some VLM configs use ``model_type`` exclusively.
+        return str(getattr(cfg, "model_type", "")) or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+_VLM_ARCH_PATTERNS: tuple[str, ...] = (
+    "Vision",
+    "VL",
+    "MultiModal",
+    "ImageText",
+    "Idefics",
+    "LlavaForConditionalGeneration",
+    "Llava",
+    "Pixtral",
+    "Phi3V",
+    "Phi4Multi",
+    "MiniCPMV",
+    "InternVL",
+    "Molmo",
+    "CogVLM",
+)
+
+
+def _is_multimodal(model_id: str, *, revision: str | None = None) -> bool:
+    """Best-effort: does this checkpoint declare a vision-language architecture?
+
+    The check is **structural** — we read ``config.architectures[0]`` and
+    look for known VLM markers. Substring matching is intentionally
+    permissive; new VLM architectures usually carry one of the markers above.
+    Day-zero coverage with the slow path is the design's promise (§3.3);
+    misclassifying a text-only model as VLM is the worse failure (it would
+    try to load a processor that doesn't exist), so the heuristic is
+    conservative.
+    """
+    arch = _peek_architecture(model_id, revision=revision)
+    if not arch:
+        return False
+    return any(marker in arch for marker in _VLM_ARCH_PATTERNS)
 
 
 def _auto_select(engine_args: dict[str, Any] | None) -> EngineChoice:

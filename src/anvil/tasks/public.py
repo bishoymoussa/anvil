@@ -139,8 +139,9 @@ def _build_audit_log(
     ``engine_args`` that the rule engine recognizes as a known footgun
     (e.g. ``tensor_parallel_size=3`` against a 32-head model), CaaS engages.
     """
-    if mode == "off" or engine_args is None:
+    if mode == "off":
         return None
+    engine_args = engine_args or {}
 
     from anvil.caas import AuditLog, Context, engage, load_kb
 
@@ -151,6 +152,31 @@ def _build_audit_log(
         return audit
 
     kb = load_kb()
+
+    # VLM preflight (design §5.4 / §7.7 KB qwen_vl_max_pixels_default_too_high).
+    # When the user picks a Qwen-VL family model, the factory applies safer
+    # max_pixels/min_pixels defaults; we record that engagement here so the
+    # manifest's caas_log makes the change visible to a reviewer.
+    if _is_qwen_vl_model_id(model_id):
+        ctx = Context(
+            error="memory profiling expects 256 GB",
+            model_id=model_id,
+            engine_name="vllm",
+            engine_version="0.20.1",
+            max_image_pixels=1280 * 768,  # the safer default we apply
+        )
+        sampling_args: dict[str, Any] = {}
+        outcome = engage(
+            error=ctx.error,
+            kb=kb,
+            ctx=ctx,
+            mode=mode,  # type: ignore[arg-type]
+            engine_args=engine_args,
+            sampling_args=sampling_args,
+            log=audit,
+            confirm=lambda _prompt: True,
+        )
+        del outcome
 
     # Inspect engine_args for the well-known "TP doesn't divide" pattern. We
     # don't have a live engine to query yet — design §7.2 step 1 (canonical
@@ -180,7 +206,7 @@ def _build_audit_log(
                 available_gpus=tp_size,
                 extra={"tp_size": tp_size},
             )
-            sampling_args: dict[str, Any] = {}
+            sampling_args = {}
             outcome = engage(
                 error=ctx.error,
                 kb=kb,
@@ -196,6 +222,18 @@ def _build_audit_log(
             )
             del outcome  # the audit log is what flows into the manifest
     return audit
+
+
+def _is_qwen_vl_model_id(model_id: str) -> bool:
+    """Match the Qwen-VL family model id pattern (design §5.2 fast-path table).
+
+    Mirrors the regex in the §16.7 KB entry ``qwen_vl_max_pixels_default_too_high``;
+    we duplicate it here so M4 preflight doesn't need to load the KB just to
+    answer "is this model Qwen-VL?".
+    """
+    import re as _re
+
+    return bool(_re.match(r"Qwen/Qwen[2-9](\.[0-9]+)?-VL-", model_id))
 
 
 def _likely_attention_heads(model_id: str) -> int | None:
