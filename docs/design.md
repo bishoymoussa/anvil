@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/anvil_logo_name.png" alt="anvil" width="360" />
+</p>
+
 # A Research-First, Evaluation-First Inference Library
 
 **Design Manuscript — v1.0 (May 2026)**

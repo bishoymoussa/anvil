@@ -33,3 +33,7 @@ runs/
 
 # Source manuscript lives at docs/design.md inside the repo.
 design_manuscript/
+
+# Source-resolution logo PNGs at the repo root — resized copies live in
+# docs/assets/ and are tracked. Leading slash anchors to root only.
+/anvil_logo_*.png

@@ -1,6 +1,19 @@
-# Anvil
+<p align="center">
+  <img src="docs/assets/anvil_logo_name.png" alt="anvil" width="420" />
+</p>
 
-A research-first, evaluation-first inference library.
+<p align="center">
+  <em>A research-first, evaluation-first inference library.</em>
+</p>
+
+<p align="center">
+  <a href="docs/design.md">Design&nbsp;manuscript</a> ·
+  <a href="#install">Install</a> ·
+  <a href="#quickstart">Quickstart</a> ·
+  <a href="#milestones">Milestones</a>
+</p>
+
+---
 
 > **Status: pre-alpha (v0).** All six v0 milestones (M0–M6) implemented and green. Built per the design manuscript in [`docs/design.md`](docs/design.md).
 
@@ -176,6 +189,10 @@ GSM8K (M0), MMLU + HumanEval+ (M1), MMMU (M4). Tier 2 lm-evaluation-harness impo
 
 ## Milestones
 
+<p align="left">
+  <img src="docs/assets/anvil_logo_symbol.png" alt="" width="40" align="right" />
+</p>
+
 The build proceeded milestone-by-milestone (`docs/design.md` §16.10), all green:
 
 - **M0** — HF slow path, GSM8K, manifest emitted.
@@ -189,3 +206,11 @@ The build proceeded milestone-by-milestone (`docs/design.md` §16.10), all green
 ## License
 
 Apache-2.0. See [`LICENSE`](LICENSE).
+
+---
+
+<p align="center">
+  <img src="docs/assets/anvil_logo_symbol.png" alt="anvil" width="48" />
+  <br />
+  <sub><em>Anvil — the same manifest produces the same number, today, tomorrow, and on someone else's machine.</em></sub>
+</p>
