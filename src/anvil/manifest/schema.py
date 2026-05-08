@@ -12,7 +12,6 @@ types, or renaming fields is a breaking change in semver terms (§16.9).
 
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 from typing import Any, Literal, Self
@@ -105,35 +104,31 @@ class Manifest(BaseModel):
     def sign(self) -> Self:
         """Return a copy of this manifest with :attr:`manifest_signature` set.
 
-        Uses sha256 over the canonical JSON form (excluding the signature
-        field). Idempotent: signing an already-signed manifest produces the
-        same signature.
+        Thin facade over :func:`anvil.manifest.sign.sign`; idempotent.
         """
-        encoded = self.canonical_json().encode("utf-8")
-        sig = "sha256:" + hashlib.sha256(encoded).hexdigest()
-        return self.model_copy(update={"manifest_signature": sig})
+        from anvil.manifest.sign import sign as _sign
+
+        return _sign(self)  # type: ignore[return-value]
 
     def verify(self) -> bool:
-        """Recompute the signature and check it matches :attr:`manifest_signature`."""
-        if not self.manifest_signature:
-            return False
-        encoded = self.canonical_json().encode("utf-8")
-        expected = "sha256:" + hashlib.sha256(encoded).hexdigest()
-        return expected == self.manifest_signature
+        """Recompute the signature and check it matches.
+
+        Thin facade over :func:`anvil.manifest.verify.verify`. Returns False
+        for unsigned manifests; use :func:`anvil.manifest.verify.verify_or_raise`
+        to fail loud.
+        """
+        from anvil.manifest.verify import verify as _verify
+
+        return _verify(self)
 
     # ------------------------------------------------------------------ diff
     @classmethod
     def diff(cls, a: Manifest, b: Manifest) -> dict[str, Any]:
-        """Recursive diff that flags every field which could explain a score delta.
+        """Flat ``{path: (a_value, b_value)}`` diff. Severity-tagged form
+        is :func:`anvil.manifest.diff.diff_entries`."""
+        from anvil.manifest.diff import diff as _diff
 
-        Lands as a fully-fledged tool in M2; for now this is a usable but
-        unoptimized recursive comparison that returns ``{path: (a_value, b_value)}``.
-        """
-        return _diff_dicts(
-            a.model_dump(mode="json"),
-            b.model_dump(mode="json"),
-            ignore=("manifest_signature", "started_at", "ended_at"),
-        )
+        return _diff(a, b)
 
     # ------------------------------------------------------------------ I/O
     def save(self, path: str | Path) -> Path:
@@ -169,30 +164,6 @@ class Manifest(BaseModel):
             return cls.model_validate_json(p.read_text(encoding="utf-8"))
         except (ValueError, TypeError) as exc:
             raise ManifestError(f"invalid manifest at {p}: {exc}") from exc
-
-
-def _diff_dicts(a: Any, b: Any, *, path: str = "", ignore: tuple[str, ...] = ()) -> dict[str, Any]:
-    """Recursive structural diff used by :meth:`Manifest.diff`."""
-    out: dict[str, Any] = {}
-    if isinstance(a, dict) and isinstance(b, dict):
-        for k in a.keys() | b.keys():
-            if k in ignore:
-                continue
-            sub_path = f"{path}.{k}" if path else k
-            inner = _diff_dicts(a.get(k), b.get(k), path=sub_path, ignore=ignore)
-            out.update(inner)
-        return out
-    if isinstance(a, list) and isinstance(b, list):
-        if len(a) != len(b):
-            out[path] = (a, b)
-            return out
-        for i, (x, y) in enumerate(zip(a, b, strict=True)):
-            inner = _diff_dicts(x, y, path=f"{path}[{i}]", ignore=ignore)
-            out.update(inner)
-        return out
-    if a != b:
-        out[path] = (a, b)
-    return out
 
 
 def manifest_from_canonical_json(text: str) -> Manifest:
