@@ -1,14 +1,5 @@
 name: Wheels
 
-# Multi-CUDA wheel matrix per design §9.1. Triggered on tags + manual.
-# The cu121/cu128/cu130 jobs each pin to the matching torch wheel and
-# build Anvil against it; the CPU fallback is pure-Python.
-#
-# This workflow is *prepared* but not exercised in the agent's build
-# session — running it requires self-hosted CI infrastructure with the
-# right CUDA toolchains. It documents the release pipeline so a human
-# maintainer can run it once the infra is in place.
-
 on:
   workflow_dispatch:
   push:
@@ -21,15 +12,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
-      - name: Set up Python
-        run: uv python install 3.11
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
       - name: Build sdist + wheel
         run: |
-          uv venv
-          uv pip install build
-          uv run --no-sync python -m build
+          pip install build
+          python -m build
       - uses: actions/upload-artifact@v4
         with:
           name: anvil-cpu
@@ -50,19 +39,17 @@ jobs:
             torch: "2.9.0+cu130"
     steps:
       - uses: actions/checkout@v4
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
-      - name: Set up Python
-        run: uv python install 3.11
-      - name: Install torch matching the CUDA target
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install torch for CUDA target
         run: |
-          uv venv
-          uv pip install torch==${{ matrix.torch }} \
+          pip install torch==${{ matrix.torch }} \
             --index-url https://download.pytorch.org/whl/${{ matrix.cuda }}
       - name: Build wheel
         run: |
-          uv pip install build
-          uv run --no-sync python -m build --wheel --no-isolation
+          pip install build
+          python -m build --wheel
       - name: Rename wheel with CUDA tag
         run: |
           for w in dist/*.whl; do
@@ -85,5 +72,5 @@ jobs:
         with:
           merge-multiple: true
           path: dist
-      - name: Publish (trusted-publishing)
+      - name: Publish (trusted publishing)
         uses: pypa/gh-action-pypi-publish@release/v1
