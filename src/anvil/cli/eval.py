@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 from pathlib import Path  # noqa: TC003 — typer reads runtime annotations
+from typing import TYPE_CHECKING
 
 import typer
 
 from anvil.exceptions import AnvilError
 from anvil.logging import get_logger
 from anvil.tasks.public import eval as anvil_eval
+
+if TYPE_CHECKING:
+    from anvil.tasks.base import Task as _Task
 
 _log = get_logger(__name__)
 
@@ -61,21 +65,29 @@ def eval_cmd(
         )
         raise typer.Exit(code=2)
 
-    # Compile any --lm-eval-tasks YAML paths up-front and merge into the run.
+    # Compile any --lm-eval-tasks entries up-front and merge into the run.
+    # Accepts either a YAML file path or a bare lm-eval task name (resolved
+    # from the installed lm-eval catalog via lm_eval.tasks.get_task_dict).
     if yaml_list:
         from anvil.tasks.lm_eval_shim import compile_yaml
 
         for spec in yaml_list:
             spec_path = Path(spec)
-            if not spec_path.exists():
-                typer.echo(
-                    f"error: --lm-eval-tasks expects YAML paths; {spec!r} does not exist. "
-                    "(Looking up by lm-eval task name lands in v0.5.)",
-                    err=True,
-                )
-                raise typer.Exit(code=2)
-            compiled = compile_yaml(spec_path)
-            task_list.append(compiled.name)
+            if spec_path.exists():
+                compiled = compile_yaml(spec_path)
+                task_list.append(compiled.name)
+            else:
+                # Try the lm-eval task catalog by name.
+                resolved = _resolve_lm_eval_task_by_name(spec)
+                if resolved is None:
+                    typer.echo(
+                        f"error: {spec!r} is not a YAML path and was not found in the "
+                        "lm-evaluation-harness task catalog. Install lm_eval and check "
+                        "the task name with `lm_eval --tasks list`.",
+                        err=True,
+                    )
+                    raise typer.Exit(code=2)
+                task_list.append(resolved.name)
 
     try:
         result = anvil_eval(
@@ -114,6 +126,54 @@ def eval_cmd(
         typer.echo("\n--compare-with-lm-eval delta report:")
         for r in results:
             typer.echo(f"  {r.render()}")
+
+
+def _resolve_lm_eval_task_by_name(name: str) -> type[_Task] | None:
+    """Compile an lm-eval task by catalog name into an Anvil Task class.
+
+    Tries ``lm_eval.tasks.get_task_dict`` (the standard programmatic API for
+    lm-evaluation-harness ≥ 0.4). Returns ``None`` if lm_eval is not
+    installed or the task name is unknown.
+    """
+    try:
+        import lm_eval.tasks as _lm_tasks
+    except ImportError:
+        return None
+
+    try:
+        task_dict = _lm_tasks.get_task_dict([name])
+    except Exception:  # noqa: BLE001 — lm_eval raises various errors for unknown tasks
+        return None
+
+    if not task_dict:
+        return None
+
+    # ``get_task_dict`` returns ``{name: TaskGroup | Task}``. Retrieve the
+    # underlying config (a dict-like object) and compile it via our shim.
+    task_obj = task_dict.get(name)
+    if task_obj is None:
+        return None
+
+    from anvil.tasks.lm_eval_shim import compile_yaml_dict
+
+    # lm_eval Task objects expose their config as a dict via .config or
+    # .task_config depending on the version. Build a minimal YAML-shaped
+    # dict that the compiler understands.
+    cfg: dict[str, object] = {}
+    for attr in ("config", "task_config", "_config"):
+        raw = getattr(task_obj, attr, None)
+        if raw is not None:
+            cfg = dict(raw) if not isinstance(raw, dict) else dict(raw)
+            break
+
+    if not cfg:
+        return None
+
+    cfg.setdefault("task", name)
+    try:
+        return compile_yaml_dict(cfg)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 __all__ = ["app", "eval_cmd"]
