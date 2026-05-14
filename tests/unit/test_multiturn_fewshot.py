@@ -5,9 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from anvil.primitives.request import LogLikelihood
-from anvil.tasks.base import MultiTurnFewshot
-from anvil.tasks.builtin.mmlu import MMLU, MMLUMultiTurn
-
+from anvil.tasks.base import MultiTurnFewshot  # noqa: F401 — used via _ToyMultiTurn
+from anvil.tasks.builtin.mmlu import MMLUMultiTurn
 
 _EXEMPLARS = [
     {"question": "Q1?", "choices": ["a", "b", "c", "d"], "answer": 0, "subject": "math"},

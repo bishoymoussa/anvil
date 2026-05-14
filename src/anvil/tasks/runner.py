@@ -150,11 +150,10 @@ def run_eval(
     sampler_field: dict[str, Any] | None = None
 
     for task in tasks:
-        if task.request_type not in ("Generate", "LogLikelihood", "Embed", "Custom"):
+        if task.request_type not in ("Generate", "LogLikelihood", "Embed", "Custom", "Classify"):
             raise TaskError(
-                f"task {task.name!r}: request_type={task.request_type!r} not yet "
-                "supported. M5 ships Generate / LogLikelihood / Embed / Custom; "
-                "Classify lands in v0.5 (design §16.10)."
+                f"task {task.name!r}: request_type={task.request_type!r} not supported. "
+                "Supported types: Generate, LogLikelihood, Embed, Custom, Classify."
             )
         _log.info(
             "running task %s (n_fewshot=%d, limit=%s, type=%s)",
@@ -218,6 +217,17 @@ def run_eval(
                         f"request appeared: {type(fr).__name__}"
                     )
             flat_responses = list(engine.embed(embed_requests))
+        elif task.request_type == "Classify":
+            from anvil.primitives.request import Classify as _Classify
+
+            classify_requests: list[_Classify] = list(flat_requests)
+            for fr in classify_requests:
+                if not isinstance(fr, _Classify):
+                    raise TaskError(
+                        f"task {task.name!r}: request_type='Classify' but a non-Classify "
+                        f"request appeared: {type(fr).__name__}"
+                    )
+            flat_responses = list(engine.classify(classify_requests))
         else:  # Custom
             from anvil.primitives.request import Custom as _Custom
 

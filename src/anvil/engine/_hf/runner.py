@@ -445,11 +445,35 @@ class HFEngine:
         )
 
     def classify(self, requests: list[Classify]) -> list[ClassifyResult]:
-        del requests
-        raise EngineError(
-            "Classify requests are not supported by the HF causal-LM slow path "
-            "in M0. Score via loglikelihood over each label as a continuation."
-        )
+        """Score each input against its label set via per-label log-likelihood.
+
+        Each (input, label) pair becomes a LogLikelihood request with the
+        input as context and the label as continuation. The label with the
+        highest logprob wins.
+        """
+        if not requests:
+            return []
+
+        # Expand: one LogLikelihood per (request, label) combination.
+        ll_requests: list[LogLikelihood] = []
+        label_counts: list[int] = []
+        for req in requests:
+            inp = str(req.input)
+            for label in req.label_set:
+                ll_requests.append(LogLikelihood(context=inp, continuation=label))
+            label_counts.append(len(req.label_set))
+
+        ll_responses = self.loglikelihood(ll_requests)
+
+        results: list[ClassifyResult] = []
+        cursor = 0
+        for req, count in zip(requests, label_counts, strict=True):
+            chunk = ll_responses[cursor : cursor + count]
+            cursor += count
+            logprobs = {label: lp for label, (lp, _) in zip(req.label_set, chunk, strict=True)}
+            best_label = max(logprobs, key=lambda k: logprobs[k])
+            results.append(ClassifyResult(label=best_label, label_logprobs=logprobs))
+        return results
 
     def custom(self, fn: Callable[[list[Any]], list[Any]], inputs: list[Any]) -> list[Any]:
         return fn(inputs)
