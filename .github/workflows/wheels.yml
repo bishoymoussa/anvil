@@ -48,13 +48,16 @@ jobs:
             --index-url https://download.pytorch.org/whl/${{ matrix.cuda }}
       - name: Build wheel
         run: |
-          pip install build
+          pip install build tomli
+          # Stamp the local version with the CUDA tag (PEP 440: 0.2.0+cu121)
+          python - <<'EOF'
+          import re, pathlib
+          p = pathlib.Path("pyproject.toml")
+          txt = p.read_text()
+          txt = re.sub(r'(^version\s*=\s*")([^"]+)(")', r'\g<1>\g<2>+${{ matrix.cuda }}\g<3>', txt, flags=re.MULTILINE)
+          p.write_text(txt)
+          EOF
           python -m build --wheel
-      - name: Rename wheel with CUDA tag
-        run: |
-          for w in dist/*.whl; do
-            mv "$w" "${w%.whl}-${{ matrix.cuda }}.whl"
-          done
       - uses: actions/upload-artifact@v4
         with:
           name: anvil-${{ matrix.cuda }}
