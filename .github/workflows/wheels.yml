@@ -65,6 +65,9 @@ jobs:
     needs: [build-cpu-wheel, build-cuda-wheels]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
+    environment:
+      name: pypi
+      url: https://pypi.org/p/anvil-eval
     permissions:
       id-token: write
     steps:
