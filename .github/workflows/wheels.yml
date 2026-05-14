@@ -29,7 +29,7 @@ jobs:
         run: |
           uv venv
           uv pip install build
-          uv run python -m build
+          uv run --no-sync python -m build
       - uses: actions/upload-artifact@v4
         with:
           name: anvil-cpu
@@ -45,9 +45,9 @@ jobs:
           - cuda: cu121
             torch: "2.4.1+cu121"
           - cuda: cu128
-            torch: "2.6.0+cu128"
+            torch: "2.7.0+cu128"
           - cuda: cu130
-            torch: "2.8.0+cu130"
+            torch: "2.9.0+cu130"
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -62,7 +62,7 @@ jobs:
       - name: Build wheel
         run: |
           uv pip install build
-          uv run python -m build --wheel
+          uv run --no-sync python -m build --wheel --no-isolation
       - name: Rename wheel with CUDA tag
         run: |
           for w in dist/*.whl; do
