@@ -30,6 +30,8 @@ if TYPE_CHECKING:
 
     from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 
+    from anvil.primitives.hidden_state_spec import HiddenStateSpec
+
 _log = get_logger(__name__)
 
 
@@ -224,21 +226,27 @@ class HFEngine:
         Padding is left-side; attention mask is the standard 0/1 inverse of
         pad positions; we use ``model.generate`` so HF handles the KV cache
         for us — what we own is *making sure the inputs are right*.
+
+        If any request carries a :class:`~anvil.primitives.hidden_state_spec.HiddenStateSpec`,
+        the forward pass runs with ``output_hidden_states=True`` and the
+        requested layers / positions are extracted and returned in
+        :attr:`~anvil.primitives.response.Generation.hidden_states`.
         """
         if not requests:
             return []
         prompts = [self._render_generate(r) for r in requests]
         sampler = self._resolve_sampler(requests[0])
-        # M0 invariant: all requests in a batch share a sampler. Multi-sampler
-        # batching is M2 work (per-request logits processors).
         for r in requests[1:]:
             other = self._resolve_sampler(r)
             if other.hash != sampler.hash:
                 raise TaskError(
-                    "M0 HFEngine.generate_logprobs requires all requests in a "
-                    "batch to share a Sampler; got different hashes. "
-                    "Per-request samplers land with the wrapper layer in M2."
+                    "HFEngine.generate_logprobs requires all requests in a "
+                    "batch to share a Sampler; got different hashes."
                 )
+
+        capture_spec: HiddenStateSpec | None = next(
+            (r.capture for r in requests if r.capture is not None), None
+        )
 
         enc = self.tokenizer(
             prompts,
@@ -246,7 +254,7 @@ class HFEngine:
             padding=True,
             truncation=True,
             max_length=getattr(self.config, "max_position_embeddings", 8192),
-            add_special_tokens=False,  # the chat template emits BOS already
+            add_special_tokens=False,
         )
         input_ids = enc["input_ids"].to(self._device)
         attention_mask = enc["attention_mask"].to(self._device)
@@ -259,8 +267,12 @@ class HFEngine:
                 stop_token_ids.append(sid)
 
         gen_kwargs = _sampler_to_hf_kwargs(sampler, stop_token_ids)
+        if capture_spec is not None:
+            gen_kwargs["output_hidden_states"] = True
+            gen_kwargs["return_dict_in_generate"] = True
+
         try:
-            out_ids = self.model.generate(
+            raw_out = self.model.generate(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 **gen_kwargs,
@@ -269,19 +281,41 @@ class HFEngine:
         except RuntimeError as exc:
             raise EngineError(f"HF generate failed: {exc}") from exc
 
+        # Unpack: with return_dict_in_generate the output is a ModelOutput.
+        if capture_spec is not None:
+            out_ids = raw_out.sequences  # type: ignore[union-attr]
+            # hidden_states is a tuple of tuples: (step, layer, [B, seq, H])
+            raw_hidden: tuple[tuple[torch.Tensor, ...], ...] = getattr(
+                raw_out, "hidden_states", ()
+            )
+        else:
+            out_ids = raw_out
+            raw_hidden = ()
+
         results: list[Generation] = []
         for i, full in enumerate(out_ids):
-            # The first ``input_ids.shape[1]`` positions are the (padded) prompt.
             new_ids = full[input_ids.shape[1] :].tolist()
             new_ids = _strip_trailing(new_ids, stop_token_ids)
             text = self.tokenizer.decode(new_ids, skip_special_tokens=True)
             finish = "stop" if (new_ids and new_ids[-1] in stop_token_ids) else "length"
+
+            hidden: dict[int, torch.Tensor] = {}
+            if capture_spec is not None and raw_hidden:
+                hidden = _extract_hidden_states(
+                    raw_hidden=raw_hidden,
+                    spec=capture_spec,
+                    batch_idx=i,
+                    prompt_len=int(prompt_lengths[i]),
+                    gen_len=len(new_ids),
+                )
+
             results.append(
                 Generation(
                     text=text,
                     token_ids=tuple(new_ids),
                     finish_reason=finish,
-                    prompt_token_count=prompt_lengths[i],
+                    prompt_token_count=int(prompt_lengths[i]),
+                    hidden_states=hidden,
                 )
             )
         return results
@@ -533,6 +567,73 @@ def _sampler_to_hf_kwargs(sampler: Sampler, stop_token_ids: list[int]) -> dict[s
     if sampler.n != 1:
         kwargs["num_return_sequences"] = sampler.n
     return kwargs
+
+
+def _extract_hidden_states(
+    raw_hidden: tuple[tuple[torch.Tensor, ...], ...],
+    spec: HiddenStateSpec,
+    batch_idx: int,
+    prompt_len: int,
+    gen_len: int,
+) -> dict[int, torch.Tensor]:
+    """Slice per-layer hidden states out of HF's generate output format.
+
+    HF returns ``hidden_states`` as a tuple of generation steps; each step
+    is a tuple of layer tensors with shape ``[batch, seq_at_step, hidden]``.
+    Step 0 covers the full prompt; subsequent steps cover one new token each.
+
+    We concatenate across steps (dim=1) to get the full sequence per layer,
+    then apply :attr:`HiddenStateSpec.positions` to select positions.
+    """
+    num_layers = len(raw_hidden[0]) if raw_hidden else 0
+    total_len = prompt_len + gen_len
+
+    # Resolve layer indices (support negatives).
+    resolved_layers: list[int] = []
+    for layer_idx in spec.layers:
+        actual = layer_idx if layer_idx >= 0 else num_layers + layer_idx
+        if 0 <= actual < num_layers:
+            resolved_layers.append(actual)
+
+    captured: dict[int, torch.Tensor] = {}
+    for layer_idx in resolved_layers:
+        # Collect this layer's tensor slice across all steps.
+        step_slices: list[torch.Tensor] = []
+        for step_tensors in raw_hidden:
+            if layer_idx < len(step_tensors):
+                # Shape: [batch, seq_at_step, hidden]
+                step_slices.append(step_tensors[layer_idx][batch_idx])  # [seq, hidden]
+        if not step_slices:
+            continue
+        full_seq = torch.cat(step_slices, dim=0)  # [total_len, hidden]
+
+        # Apply position spec.
+        positions = spec.positions
+        if isinstance(positions, tuple):
+            idx = torch.tensor(
+                [p % total_len for p in positions], dtype=torch.long, device=full_seq.device
+            )
+            sliced = full_seq[idx]
+        elif positions == "last":
+            sliced = full_seq[-1:] if full_seq.shape[0] > 0 else full_seq
+        elif positions == "first":
+            sliced = full_seq[:1]
+        else:  # "all", "image_tokens", "text_tokens" — return all for now
+            sliced = full_seq
+
+        # Cast if requested.
+        if spec.dtype is not None:
+            sliced = sliced.to(spec.dtype)
+        if spec.pin_memory and sliced.is_cuda:
+            sliced = sliced.cpu().pin_memory()
+        elif sliced.is_cuda:
+            sliced = sliced.cpu()
+
+        # Store under the original (possibly negative) layer index for stable keys.
+        original_idx = spec.layers[resolved_layers.index(layer_idx)]
+        captured[original_idx] = sliced
+
+    return captured
 
 
 __all__ = ["HFEngine"]
