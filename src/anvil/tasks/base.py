@@ -170,15 +170,12 @@ class MultipleChoice(Task):
     under single-turn fewshot. The reason: the model was trained to
     start its assistant turn conversationally ("Sure, the answer
     is...") — so ``P("A" | <|im_start|>assistant\\n)`` is low even
-    when "A" is correct. Multi-turn fewshot (each exemplar as its own
-    user/assistant pair) is the design's real answer per lm-eval-harness
-    #1841; it lands in v0.5 alongside a ``MultiTurnFewshot`` mixin.
+    when "A" is correct.
 
-    Explicit ``chat_templated = True`` is honored: the
-    :class:`LogLikelihood` request flag, the engine's
-    :meth:`_render_chat_context` plumbing, and the no-leading-space
-    continuation form are all wired and tested. It's opt-in pending
-    the multi-turn fix.
+    The correct fix for instruct-tuned models is :class:`MultiTurnFewshot`:
+    each exemplar becomes its own user/assistant message pair, so the model
+    sees the full conversation history and scores the final answer token
+    correctly. Use ``MultiTurnFewshot`` instead of setting this flag alone.
     """
 
     @abstractmethod
@@ -243,6 +240,78 @@ class MultipleChoice(Task):
         return {self.metric_name: correct / len(predictions)}
 
 
+class MultiTurnFewshot(MultipleChoice):
+    """Mixin that packs few-shot exemplars as multi-turn user/assistant messages.
+
+    This is the correct fewshot strategy for instruct-tuned models. Instead of
+    concatenating all exemplars into a single long prompt (single-turn), each
+    exemplar becomes its own user/assistant exchange:
+
+    .. code-block::
+
+        user:      "What is 2+2?\\nA. 3\\nB. 4\\nC. 5\\nD. 6\\nAnswer:"
+        assistant: "B"
+        user:      "What is 3+3?\\nA. 5\\nB. 6\\nC. 7\\nD. 8\\nAnswer:"
+        assistant: "B"
+        user:      <current question stem>   ← scored against "A"/"B"/"C"/"D"
+
+    Why this fixes the 15pp gap: instruct models are trained to start assistant
+    turns with a direct answer when the conversation context makes it obvious.
+    Single-turn fewshot collapses all that context into one user message, so
+    the model never sees the pattern of short-answer assistant turns and falls
+    back to its "sure, the answer is…" conversational preamble, tanking the
+    logprob of the bare letter.
+
+    Subclasses must implement:
+
+    * ``doc_to_text(doc)`` — renders the question stem (question + options +
+      "Answer:" cue) for a single doc, without any fewshot prefix.
+    * ``doc_to_exemplars()`` — returns the ordered list of few-shot exemplar
+      dicts. Called once and cached.
+    * ``exemplar_to_answer(doc)`` — returns the gold answer string (e.g. ``"B"``)
+      for an exemplar doc.
+
+    The ``chat_templated`` flag is forced True: multi-turn fewshot is only
+    meaningful when the chat template is applied.
+    """
+
+    chat_templated: ClassVar[bool] = True
+
+    def doc_to_exemplars(self) -> list[dict[str, Any]]:
+        """Return the ordered fewshot exemplar pool. Default: empty (zero-shot)."""
+        return []
+
+    def exemplar_to_answer(self, doc: dict[str, Any]) -> str:
+        """Return the gold answer letter for an exemplar doc."""
+        raise NotImplementedError(
+            f"{type(self).__name__} uses MultiTurnFewshot but doesn't implement "
+            "exemplar_to_answer(). Return the gold letter string (e.g. 'B')."
+        )
+
+    def doc_to_messages(self, doc: dict[str, Any]) -> list[dict[str, Any]]:
+        """Build the full multi-turn message list for ``doc``.
+
+        Each fewshot exemplar becomes a user/assistant pair. The final user
+        message is the current question stem (without the answer).
+        """
+        messages: list[dict[str, Any]] = []
+        for ex in self.doc_to_exemplars()[: self.n_fewshot]:
+            messages.append({"role": "user", "content": self.doc_to_text(ex)})
+            messages.append({"role": "assistant", "content": self.exemplar_to_answer(ex)})
+        messages.append({"role": "user", "content": self.doc_to_text(doc)})
+        return messages
+
+    def doc_to_request(self, doc: dict[str, Any]) -> Sequence[Request]:
+        from anvil.primitives.request import LogLikelihood
+
+        messages = self.doc_to_messages(doc)
+        msg_tuple = tuple(messages)
+        return [
+            LogLikelihood(messages=msg_tuple, continuation=c, chat_templated=True)
+            for c in self.doc_to_choices(doc)
+        ]
+
+
 @dataclass
 class _FewshotPool:
     """A fixed pool of fewshot examples, sliced deterministically per-request."""
@@ -296,4 +365,4 @@ def materialize_dataset(spec: DatasetSpec, *, split: str = "test") -> Iterator[d
         yield dict(row)
 
 
-__all__ = ["Task", "DatasetSpec", "Tier", "materialize_dataset"]
+__all__ = ["Task", "MultipleChoice", "MultiTurnFewshot", "DatasetSpec", "Tier", "materialize_dataset"]

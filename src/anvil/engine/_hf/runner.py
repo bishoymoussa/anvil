@@ -166,6 +166,30 @@ class HFEngine:
     def _resolve_sampler(self, req: Generate) -> Sampler:
         return req.sampler if req.sampler is not None else Sampler.greedy()
 
+    def _render_messages(self, messages: list[dict[str, Any]]) -> str:
+        """Apply the chat template to a pre-built multi-turn message list.
+
+        Used by :meth:`loglikelihood` when the request carries a ``messages``
+        list (multi-turn fewshot). The template is applied with
+        ``add_generation_prompt=True`` so the engine scores the continuation
+        as the assistant turn's first tokens — identical semantics to the
+        single-turn path but with the full conversation history visible.
+        """
+        try:
+            return str(
+                self.tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+            )
+        except (AttributeError, ValueError, TypeError):
+            # Fall back to concatenating user messages if the tokenizer
+            # doesn't support apply_chat_template.
+            return "\n".join(
+                m["content"] for m in messages if isinstance(m.get("content"), str)
+            )
+
     def _render_chat_context(self, context: str) -> str:
         """Wrap ``context`` as a user turn and apply the model's chat template.
 
@@ -318,7 +342,14 @@ class HFEngine:
         # models, addressing lm-eval-harness #1841 by construction.
         pairs: list[tuple[list[int], list[int]]] = []  # (ctx_ids, full_ids)
         for req in requests:
-            rendered = self._render_chat_context(req.context) if req.chat_templated else req.context
+            if req.messages is not None:
+                # Multi-turn fewshot: the messages list is already the full
+                # conversation; apply the chat template directly.
+                rendered = self._render_messages(list(req.messages))
+            elif req.chat_templated:
+                rendered = self._render_chat_context(req.context)
+            else:
+                rendered = req.context
             ctx_ids = self.tokenizer.encode(rendered, add_special_tokens=False)
             full_ids = self.tokenizer.encode(rendered + req.continuation, add_special_tokens=False)
             pairs.append((ctx_ids, full_ids))

@@ -52,7 +52,13 @@ class LogLikelihood:
     offsets in one prefill pass — see ``engine.loglikelihood``.
 
     Attributes:
-        context: the prompt the model conditions on.
+        context: the prompt the model conditions on. Mutually exclusive with
+            ``messages`` — provide exactly one.
+        messages: pre-built chat message list for multi-turn fewshot scoring.
+            When set, the engine applies the chat template to this list
+            (with ``add_generation_prompt=True``) instead of wrapping
+            ``context`` in a single user message. ``chat_templated`` is
+            implied True when ``messages`` is provided.
         continuation: the text whose log-probability under
             ``P(continuation | context)`` is returned.
         chat_templated: when True, the engine wraps ``context`` as a
@@ -65,11 +71,19 @@ class LogLikelihood:
             scoring (raw prompt, no template). See design §1.3 / §6.6 —
             the chat-template-missing-on-loglikelihood failure mode that
             shifts MMLU/ARC scores by 5–15pp on instruct models.
+            Automatically True when ``messages`` is supplied.
     """
 
-    context: str
-    continuation: str
+    context: str = ""
+    continuation: str = ""
     chat_templated: bool = False
+    messages: tuple[dict[str, Any], ...] | None = None
+
+    def __post_init__(self) -> None:
+        if self.messages is not None and self.context:
+            raise ValueError("LogLikelihood: provide context or messages, not both")
+        if self.messages is None and not self.context and not self.continuation:
+            raise ValueError("LogLikelihood: context or messages must be provided")
 
 
 PoolStrategy = Literal["mean", "cls", "last", "max", "none"]

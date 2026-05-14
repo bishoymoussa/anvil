@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from anvil.tasks.base import MultipleChoice
+from anvil.tasks.base import MultipleChoice, MultiTurnFewshot
 from anvil.tasks.registry import register_task
 
 if TYPE_CHECKING:
@@ -123,4 +123,47 @@ class MMLU(MultipleChoice):
         return int(doc["answer"])
 
 
-__all__ = ["MMLU"]
+@register_task
+class MMLUMultiTurn(MultiTurnFewshot, MMLU):
+    """MMLU scored with multi-turn fewshot for instruct-tuned models.
+
+    Each fewshot exemplar is a separate user/assistant message pair, so
+    the model sees the full conversation history and scores the final answer
+    token correctly — fixing the 15pp gap vs single-turn chat-templated mode
+    documented in lm-evaluation-harness #1841.
+
+    Use this instead of ``MMLU`` when evaluating instruct-tuned models.
+    """
+
+    name = "mmlu_multiturn"
+    chat_templated = True  # forced by MultiTurnFewshot, explicit here for clarity
+
+    def doc_to_exemplars(self) -> list[dict[str, Any]]:
+        """Return per-subject dev exemplars using the pool MMLU already loads."""
+        # We don't know the current doc's subject here, so return an empty list;
+        # doc_to_messages is overridden to pass the subject through.
+        return []
+
+    def doc_to_messages(self, doc: dict[str, Any]) -> list[dict[str, Any]]:
+        """Build multi-turn message list with subject-matched exemplars."""
+        pool = self._ensure_fewshot_pool()
+        subject = str(doc.get("subject", "default"))
+        exemplars = pool.get(subject, [])[: self.n_fewshot]
+
+        messages: list[dict[str, Any]] = []
+        for ex in exemplars:
+            messages.append({"role": "user", "content": self.doc_to_text(ex)})
+            messages.append({"role": "assistant", "content": _LETTERS[int(ex["answer"])]})
+        messages.append({"role": "user", "content": self.doc_to_text(doc)})
+        return messages
+
+    def exemplar_to_answer(self, doc: dict[str, Any]) -> str:
+        return _LETTERS[int(doc["answer"])]
+
+    def doc_to_choices(self, doc: dict[str, Any]) -> list[str]:
+        # Multi-turn: bare letters, no leading space (chat template separates).
+        del doc
+        return list(_LETTERS)
+
+
+__all__ = ["MMLU", "MMLUMultiTurn"]
