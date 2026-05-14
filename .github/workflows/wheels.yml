@@ -48,23 +48,26 @@ jobs:
             --index-url https://download.pytorch.org/whl/${{ matrix.cuda }}
       - name: Build wheel
         run: |
-          pip install build tomli
-          # Stamp the local version with the CUDA tag (PEP 440: 0.2.0+cu121)
-          python - <<'EOF'
-          import re, pathlib
-          p = pathlib.Path("pyproject.toml")
-          txt = p.read_text()
-          txt = re.sub(r'(^version\s*=\s*")([^"]+)(")', r'\g<1>\g<2>+${{ matrix.cuda }}\g<3>', txt, flags=re.MULTILINE)
-          p.write_text(txt)
-          EOF
+          pip install build
           python -m build --wheel
+      - name: Rename wheel with CUDA suffix for GitHub Releases
+        # PyPI forbids PEP 440 local versions (+cuXXX), so we rename only for
+        # the GitHub Release asset name. The rename uses a plain dash suffix
+        # (not a + local version) so it's clear but not a valid wheel tag —
+        # users install via: pip install <url-to-this-whl>
+        run: |
+          cd dist
+          for f in *.whl; do
+            mv "$f" "${f%.whl}-${{ matrix.cuda }}.whl"
+          done
+          ls -lh
       - uses: actions/upload-artifact@v4
         with:
           name: anvil-${{ matrix.cuda }}
-          path: dist/*
+          path: dist/*.whl
 
-  publish:
-    name: Publish to PyPI on tag
+  publish-pypi:
+    name: Publish CPU wheel + sdist to PyPI
     needs: [build-cpu-wheel, build-cuda-wheels]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
@@ -76,9 +79,28 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          merge-multiple: true
+          # Only the CPU artifact (sdist + pure wheel) goes to PyPI.
+          # CUDA wheels go to GitHub Releases (PyPI forbids local versions).
+          name: anvil-cpu
           path: dist
       - name: Show artifacts
         run: ls -lh dist/
       - name: Publish (trusted publishing)
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  publish-github-release:
+    name: Attach CUDA wheels to GitHub Release
+    needs: [build-cpu-wheel, build-cuda-wheels]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: dist
+      - name: Upload CUDA wheels to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*-cu*.whl
