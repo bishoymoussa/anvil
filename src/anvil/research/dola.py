@@ -1,9 +1,12 @@
 """DoLa (Decoding by Contrasting Layers) — Chuang et al. 2023.
 
-This is a placeholder so the public symbol exists in v0. The full processor
-needs hidden-state extraction wired through both the HF and vLLM backends —
-that's M2/M3 territory in this codebase. Calling :meth:`process` raises
+The :class:`DoLa` processor implements the :class:`~anvil.primitives.logits_processor.LogitsProcessor`
+protocol. Calling :meth:`process` requires hidden-state extraction wired through
+the engine, which lands in v0.5. Until then :meth:`process` raises
 ``NotImplementedError`` with a pointer to the design section.
+
+The class is exported from ``anvil.research`` so import paths are stable
+when the implementation ships.
 """
 
 from __future__ import annotations

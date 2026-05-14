@@ -15,7 +15,9 @@
 
 ---
 
-> **Status: pre-alpha (v0).** All six v0 milestones (M0–M6) implemented and green. Built per the design manuscript in [`docs/design.md`](docs/design.md).
+> **Status: alpha (v0.2.0).** All six v0 milestones (M0–M6) implemented and passing. Per-request logits processors (vLLM + HF), real dataset SHAs in manifests, and CI on Python 3.11/3.12 are live. Built per the design manuscript in [`docs/design.md`](docs/design.md).
+>
+> **Not yet in alpha:** multi-turn fewshot, `Classify` request type, DoLa (v0.5). CaaS LLM tier is v1.
 
 ## What this is
 

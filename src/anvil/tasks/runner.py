@@ -335,16 +335,51 @@ def _tokenization_field(engine: Engine) -> dict[str, Any]:
 
 
 def _dataset_revision(task: Task) -> str:
-    """Best-effort dataset SHA. Real implementation lands in M2.
+    """Return a stable, content-addressed revision string for the dataset.
 
-    For HF ids we record the spec verbatim with a ``hf:`` prefix; for
-    callables/paths we hash the path string. The manifest schema only requires
-    a stable string here.
+    For HF Hub datasets we resolve the commit SHA of the active split via
+    ``huggingface_hub.dataset_info`` — this is the same SHA displayed on
+    the dataset card and stored in ``DatasetInfo.sha`` by the datasets lib.
+    Falling back to the dataset id with a ``hf:`` prefix if the network
+    call fails, so offline runs still produce a valid (if un-pinned) manifest.
+
+    For local paths we SHA-256 the file contents. For callables we record
+    the qualified name (no content hash possible without materializing).
     """
+    from pathlib import Path as _Path
+
     spec = type(task).dataset
+    config = type(task).dataset_config
+
     if callable(spec):
         return "callable:" + getattr(spec, "__qualname__", "anonymous")
-    return f"hf:{spec}"
+
+    if isinstance(spec, _Path) or (isinstance(spec, str) and _Path(spec).exists()):
+        import hashlib as _hashlib
+
+        path = _Path(spec)
+        h = _hashlib.sha256()
+        try:
+            with open(path, "rb") as fh:
+                for chunk in iter(lambda: fh.read(65536), b""):
+                    h.update(chunk)
+            return f"sha256:{h.hexdigest()}"
+        except OSError:
+            return f"path:{path}"
+
+    # HF Hub dataset — attempt to resolve the commit SHA.
+    try:
+        from huggingface_hub import dataset_info as _dataset_info
+
+        info = _dataset_info(str(spec))
+        sha = getattr(info, "sha", None) or getattr(info, "id", None)
+        if sha:
+            prefix = f"{spec}@{config}" if config else str(spec)
+            return f"hf:{prefix}:{sha}"
+    except Exception:  # noqa: BLE001 — network errors, auth errors, etc.
+        pass
+
+    return f"hf:{spec}@{config or 'default'}"
 
 
 __all__ = ["EvalRunResult", "run_eval"]

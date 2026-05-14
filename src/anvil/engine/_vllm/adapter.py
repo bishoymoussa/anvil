@@ -180,13 +180,34 @@ class VLLMEngine:
         if not requests:
             return []
         sampler = self._common_sampler(requests)
-        sp = self._make_sampling_params(sampler, top_k=top_k)
-        prompts = [self._render_generate(req) for req in requests]
 
-        try:
-            outs = self._llm.generate(prompts, sp, use_tqdm=False)
-        except Exception as exc:  # noqa: BLE001
-            raise EngineError(f"vllm.LLM.generate failed: {exc}") from exc
+        # Per-request logits processors: build one vLLM-compatible callable per
+        # request that has processors attached, then use per-request SamplingParams.
+        from anvil.engine._vllm import logits_proxy
+
+        has_processors = any(req.logits_processors for req in requests)
+        if has_processors:
+            per_request_sps = []
+            for i, req in enumerate(requests):
+                extra: dict[str, Any] = {}
+                if req.logits_processors:
+                    proxy_fn = logits_proxy.build_vllm_logits_processor(
+                        request_id=str(i), processors=req.logits_processors
+                    )
+                    extra["logits_processors"] = [proxy_fn]
+                per_request_sps.append(self._make_sampling_params(sampler, top_k=top_k, **extra))
+            prompts = [self._render_generate(req) for req in requests]
+            try:
+                outs = self._llm.generate(prompts, per_request_sps, use_tqdm=False)
+            except Exception as exc:  # noqa: BLE001
+                raise EngineError(f"vllm.LLM.generate failed: {exc}") from exc
+        else:
+            sp = self._make_sampling_params(sampler, top_k=top_k)
+            prompts = [self._render_generate(req) for req in requests]
+            try:
+                outs = self._llm.generate(prompts, sp, use_tqdm=False)
+            except Exception as exc:  # noqa: BLE001
+                raise EngineError(f"vllm.LLM.generate failed: {exc}") from exc
 
         return [self._to_generation(o) for o in outs]
 
@@ -315,6 +336,7 @@ class VLLMEngine:
         top_k: int = 0,
         prompt_logprobs: int | None = None,
         logprobs: int | None = None,
+        logits_processors: list[Any] | None = None,
     ) -> Any:
         del top_k  # vLLM uses sampler.top_k directly
         import vllm
@@ -346,6 +368,8 @@ class VLLMEngine:
             kwargs["prompt_logprobs"] = prompt_logprobs
         if logprobs is not None:
             kwargs["logprobs"] = logprobs
+        if logits_processors:
+            kwargs["logits_processors"] = logits_processors
         translated = version_compat.sampling_kwargs(kwargs)
         return vllm.SamplingParams(**translated)
 

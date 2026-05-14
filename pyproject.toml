@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "anvil"
-version = "0.0.1"
+version = "0.2.0"
 description = "A research-first, evaluation-first inference library."
 readme = "README.md"
 license = "Apache-2.0"
@@ -12,7 +12,7 @@ requires-python = ">=3.11"
 authors = [{name = "Anvil contributors"}]
 keywords = ["llm", "evaluation", "reproducibility", "inference"]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
