@@ -188,9 +188,7 @@ class HFEngine:
         except (AttributeError, ValueError, TypeError):
             # Fall back to concatenating user messages if the tokenizer
             # doesn't support apply_chat_template.
-            return "\n".join(
-                m["content"] for m in messages if isinstance(m.get("content"), str)
-            )
+            return "\n".join(m["content"] for m in messages if isinstance(m.get("content"), str))
 
     def _render_chat_context(self, context: str) -> str:
         """Wrap ``context`` as a user turn and apply the model's chat template.
@@ -285,9 +283,7 @@ class HFEngine:
         if capture_spec is not None:
             out_ids = raw_out.sequences  # type: ignore[union-attr]
             # hidden_states is a tuple of tuples: (step, layer, [B, seq, H])
-            raw_hidden: tuple[tuple[torch.Tensor, ...], ...] = getattr(
-                raw_out, "hidden_states", ()
-            )
+            raw_hidden: tuple[tuple[torch.Tensor, ...], ...] = getattr(raw_out, "hidden_states", ())
         else:
             out_ids = raw_out
             raw_hidden = ()

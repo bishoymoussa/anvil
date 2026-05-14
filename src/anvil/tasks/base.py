@@ -365,4 +365,11 @@ def materialize_dataset(spec: DatasetSpec, *, split: str = "test") -> Iterator[d
         yield dict(row)
 
 
-__all__ = ["Task", "MultipleChoice", "MultiTurnFewshot", "DatasetSpec", "Tier", "materialize_dataset"]
+__all__ = [
+    "Task",
+    "MultipleChoice",
+    "MultiTurnFewshot",
+    "DatasetSpec",
+    "Tier",
+    "materialize_dataset",
+]
