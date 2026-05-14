@@ -3,7 +3,7 @@ requires = ["hatchling>=1.24"]
 build-backend = "hatchling.build"
 
 [project]
-name = "anvil"
+name = "anvil-eval"
 version = "0.2.0"
 description = "A research-first, evaluation-first inference library."
 readme = "README.md"
@@ -63,8 +63,8 @@ dev = [
 anvil = "anvil.cli.main:app"
 
 [project.urls]
-Homepage = "https://github.com/anvil-project/anvil"
-Issues = "https://github.com/anvil-project/anvil/issues"
+Homepage = "https://github.com/bishoymoussa/anvil"
+Issues = "https://github.com/bishoymoussa/anvil/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/anvil"]

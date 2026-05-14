@@ -34,10 +34,12 @@ See [`docs/design.md`](docs/design.md) for the full design rationale.
 ## Install
 
 ```bash
-uv pip install anvil
+uv pip install anvil-eval
 ```
 
 Wheels ship for `cu121`, `cu128`, `cu130`, plus a CPU fallback. The pure-Python install always works against any torch ≥ 2.4 / CUDA ≥ 12.1.
+
+> **Import name:** the Python package is still `import anvil` — only the PyPI distribution name is `anvil-eval`.
 
 For development:
 
