@@ -65,6 +65,9 @@ jobs:
     needs: [build-cpu-wheel, build-cuda-wheels]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
+    environment:
+      name: pypi
+      url: https://pypi.org/p/anvil-eval
     permissions:
       id-token: write
     steps:
@@ -72,5 +75,7 @@ jobs:
         with:
           merge-multiple: true
           path: dist
+      - name: Show artifacts
+        run: ls -lh dist/
       - name: Publish (trusted publishing)
         uses: pypa/gh-action-pypi-publish@release/v1
