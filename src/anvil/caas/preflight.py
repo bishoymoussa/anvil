@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Literal
 
 from anvil.caas.actions import Action, apply_action
 from anvil.caas.audit import AuditLog
+from anvil.caas.llm_tier import propose_fix as _llm_propose
 from anvil.caas.rule_engine import Context, Match, match
 from anvil.exceptions import CaaSCannotFix
 from anvil.logging import get_logger
@@ -134,11 +135,70 @@ def engage(
 
     m = match(ctx, kb)
     if m is None:
-        # The rule engine couldn't match. v0 has no LLM tier; we surface.
+        # Rule engine + KB couldn't match. Escalate to the LLM tier.
+        _log.info("CaaS: no KB match — escalating to LLM tier")
+        llm_action = _llm_propose(
+            error=error,
+            extra_context={"engine_args": engine_args, "sampling_args": sampling_args},
+        )
+        if llm_action is None:
+            return PreflightOutcome(
+                resolved=False,
+                log=audit,
+                message="No KB entry matched and LLM tier returned no fix. Surfacing verbatim.",
+            )
+        # Treat the LLM action like a low-confidence match: present to user,
+        # never auto-apply in ci mode (requires_user_consent=True guards that).
+        proposed_llm = (
+            f"[caas/llm-tier] Proposed fix (confidence={llm_action.confidence:.2f}):\n"
+            f"  type={llm_action.type} flag={llm_action.flag} "
+            f"name={llm_action.name} value={llm_action.value!r}\n"
+            f"  Rationale: {llm_action.rationale}\n"
+            f"  (LLM-proposed — requires_user_consent=True)"
+        )
+        if mode == "advisory":
+            _log.info("CaaS advisory (llm-tier):\n%s", proposed_llm)
+            return PreflightOutcome(
+                resolved=False,
+                action=llm_action,
+                log=audit,
+                message=proposed_llm,
+            )
+        if mode == "research":
+            if not callable(confirm):  # pragma: no cover
+                raise CaaSCannotFix("research mode requires a callable confirm hook")
+            accepted = confirm(proposed_llm + "\n\nApply? [y/N]")
+            if not accepted:
+                return PreflightOutcome(
+                    resolved=False,
+                    action=llm_action,
+                    log=audit,
+                    message="user rejected the LLM-proposed fix",
+                )
+            # Fall through to apply.
+        if mode == "ci":
+            raise CaaSCannotFix(
+                "LLM-tier action requires user consent and cannot run in --caas=ci mode"
+            )
+        # Apply (research mode, user accepted).
+        result = apply_action(
+            llm_action,
+            engine_args=dict(engine_args) if engine_args is not None else {},
+            sampling_args=dict(sampling_args) if sampling_args is not None else {},
+            allow_install=allow_install,
+        )
+        audit.record(
+            step=len(audit) + 1,
+            trigger=error,
+            action=llm_action,
+            match_source="llm_tier",
+            result=result,
+        )
         return PreflightOutcome(
-            resolved=False,
+            resolved=result.applied,
+            action=llm_action,
             log=audit,
-            message="No KB entry matched the captured error. Surfacing verbatim.",
+            message=proposed_llm if result.applied else result.reason,
         )
 
     action = m.action

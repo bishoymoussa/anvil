@@ -225,6 +225,10 @@ class HFEngine:
         pad positions; we use ``model.generate`` so HF handles the KV cache
         for us — what we own is *making sure the inputs are right*.
 
+        If any request carries :attr:`~anvil.primitives.request.Generate.logits_processors`,
+        the batch is routed to :meth:`_generate_with_processors` which runs a
+        step-by-step loop so processors can inspect per-step hidden states.
+
         If any request carries a :class:`~anvil.primitives.hidden_state_spec.HiddenStateSpec`,
         the forward pass runs with ``output_hidden_states=True`` and the
         requested layers / positions are extracted and returned in
@@ -232,6 +236,9 @@ class HFEngine:
         """
         if not requests:
             return []
+        # Route to the step-by-step loop when any request carries processors.
+        if any(r.logits_processors for r in requests):
+            return self._generate_with_processors(requests)
         prompts = [self._render_generate(r) for r in requests]
         sampler = self._resolve_sampler(requests[0])
         for r in requests[1:]:
@@ -343,6 +350,152 @@ class HFEngine:
                 )
             )
         return truncated
+
+    @torch.inference_mode()
+    def _generate_with_processors(self, requests: list[Generate]) -> list[Generation]:
+        """Step-by-step generation loop that threads hidden states into processors.
+
+        Called by :meth:`generate_logprobs` when any request carries
+        ``logits_processors``. Runs one forward pass per token so processors
+        that set ``requires_hidden_states = True`` (e.g. DoLa) get the full
+        layer activations at every step.
+
+        Processors with ``bind`` methods receive the live model before the
+        loop starts — DoLa uses this to cache ``lm_head.weight``.
+        """
+        from anvil.primitives.logits_processor import LogitsProcessor
+
+        # Bind processors that expose a bind() hook (e.g. DoLa needs lm_head).
+        seen: set[int] = set()
+        for req in requests:
+            for proc in req.logits_processors:
+                if id(proc) not in seen and hasattr(proc, "bind"):
+                    proc.bind(self.model)
+                    seen.add(id(proc))
+
+        needs_hidden = any(
+            getattr(p, "requires_hidden_states", False)
+            for r in requests
+            for p in r.logits_processors
+        )
+
+        sampler = self._resolve_sampler(requests[0])
+        prompts = [self._render_generate(r) for r in requests]
+        eos_ids = _eos_ids_for(self.tokenizer)
+        stop_ids = list(eos_ids)
+        for sid in sampler.stop_token_ids:
+            if sid not in stop_ids:
+                stop_ids.append(sid)
+        max_new_tokens = sampler.max_tokens
+        do_sample = sampler.temperature > 0.0
+
+        enc = self.tokenizer(
+            prompts,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=getattr(self.config, "max_position_embeddings", 8192),
+            add_special_tokens=False,
+        )
+        input_ids: torch.Tensor = enc["input_ids"].to(self._device)
+        attention_mask: torch.Tensor = enc["attention_mask"].to(self._device)
+        prompt_lens = attention_mask.sum(dim=1).tolist()
+
+        batch_size = input_ids.shape[0]
+        generated: list[list[int]] = [[] for _ in range(batch_size)]
+        finished = [False] * batch_size
+
+        if sampler.seed is not None:
+            torch.manual_seed(sampler.seed)
+
+        for _step in range(max_new_tokens):
+            if all(finished):
+                break
+            out = self.model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                output_hidden_states=needs_hidden,
+                use_cache=False,
+            )
+            # logits: [B, seq, vocab]; take last position
+            step_logits: torch.Tensor = out.logits[:, -1, :]  # [B, vocab]
+
+            # hidden_states: tuple of [B, seq, H] per layer → stack → [B, L, H]
+            if needs_hidden and hasattr(out, "hidden_states") and out.hidden_states:
+                hs_stacked = torch.stack(
+                    [h[:, -1, :] for h in out.hidden_states], dim=1
+                )  # [B, num_layers, hidden]
+            else:
+                hs_stacked = None
+
+            # Apply processors per batch item.
+            for i, req in enumerate(requests):
+                if finished[i] or not req.logits_processors:
+                    continue
+                tok_tensor = torch.tensor(generated[i], dtype=torch.long, device=self._device)
+                hs_i: torch.Tensor | None = None
+                if hs_stacked is not None:
+                    # Shape expected by processors: [num_layers, seq_len, hidden]
+                    # Here seq_len=1 (last position only).
+                    hs_i = hs_stacked[i].unsqueeze(1)  # [num_layers, 1, hidden]
+                logits_i = step_logits[i]
+                for proc in req.logits_processors:
+                    if isinstance(proc, LogitsProcessor):
+                        hs_arg = hs_i if getattr(proc, "requires_hidden_states", False) else None
+                        logits_i = proc.process(
+                            request_id=str(i),
+                            token_ids=tok_tensor,
+                            logits=logits_i,
+                            hidden_states=hs_arg,
+                        )
+                step_logits[i] = logits_i
+
+            # Sample or greedy.
+            if do_sample:
+                if sampler.temperature != 1.0:
+                    step_logits = step_logits / sampler.temperature
+                if sampler.top_k > 0:
+                    from torch import topk
+
+                    kth = topk(step_logits, min(sampler.top_k, step_logits.shape[-1])).values[
+                        :, -1:
+                    ]
+                    step_logits = step_logits.masked_fill(step_logits < kth, float("-inf"))
+                probs = torch.softmax(step_logits, dim=-1)
+                next_tokens = torch.multinomial(probs, num_samples=1).squeeze(1)
+            else:
+                next_tokens = step_logits.argmax(dim=-1)
+
+            # Update sequences and attention mask.
+            for i in range(batch_size):
+                if finished[i]:
+                    continue
+                tok = int(next_tokens[i].item())
+                generated[i].append(tok)
+                if tok in stop_ids:
+                    finished[i] = True
+
+            next_ids = next_tokens.unsqueeze(1)
+            input_ids = torch.cat([input_ids, next_ids], dim=1)
+            attention_mask = torch.cat(
+                [attention_mask, torch.ones(batch_size, 1, dtype=torch.long, device=self._device)],
+                dim=1,
+            )
+
+        results: list[Generation] = []
+        for i in range(batch_size):
+            new_ids = _strip_trailing(generated[i], stop_ids)
+            text = self.tokenizer.decode(new_ids, skip_special_tokens=True)
+            finish = "stop" if (generated[i] and generated[i][-1] in stop_ids) else "length"
+            results.append(
+                Generation(
+                    text=text,
+                    token_ids=tuple(new_ids),
+                    finish_reason=finish,
+                    prompt_token_count=int(prompt_lens[i]),
+                )
+            )
+        return results
 
     # -------------------------------------------------------- log-likelihood
     LOGLIKELIHOOD_BATCH_SIZE: int = 8
