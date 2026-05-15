@@ -15,7 +15,7 @@
 
 ---
 
-> **Status: alpha (v0.3.0).** DoLa contrastive decoding, CaaS LLM tier, MultiTurnFewshot, `Classify` request type, per-request logits processors (vLLM + HF), HiddenStateSpec activation capture, real dataset SHAs in manifests, lm-eval task shim, and CI on Python 3.11/3.12 are all live. CUDA wheels (cu121/cu128/cu130) on GitHub Releases; CPU wheel on PyPI.
+> **Status: alpha (v0.3.1).** DoLa contrastive decoding, CaaS LLM tier, MultiTurnFewshot, `Classify` request type, per-request logits processors (vLLM + HF), HiddenStateSpec activation capture, real dataset SHAs in manifests, lm-eval task shim, and CI on Python 3.11/3.12 are all live. CUDA wheels (cu121/cu128/cu130) on GitHub Releases; CPU wheel on PyPI.
 
 ## What this is
 
@@ -39,7 +39,7 @@ The CPU wheel ships to PyPI. CUDA wheels (`cu121`, `cu128`, `cu130`) are attache
 
 ```bash
 # Example: CUDA 12.1
-pip install https://github.com/bishoymoussa/anvil/releases/download/v0.3.0/anvil_eval-0.3.0-py3-none-any-cu121.whl
+pip install https://github.com/bishoymoussa/anvil/releases/download/v0.3.1/anvil_eval-0.3.1-py3-none-any-cu121.whl
 ```
 
 > **Import name:** the Python package is still `import anvil` — only the PyPI distribution name is `anvil-eval`.
