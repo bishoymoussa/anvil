@@ -15,9 +15,7 @@
 
 ---
 
-> **Status: alpha (v0.2.0).** All six v0 milestones (M0–M6) implemented and passing. Per-request logits processors (vLLM + HF), real dataset SHAs in manifests, and CI on Python 3.11/3.12 are live. Built per the design manuscript in [`docs/design.md`](docs/design.md).
->
-> **Not yet in alpha:** multi-turn fewshot, `Classify` request type, DoLa (v0.5). CaaS LLM tier is v1.
+> **Status: alpha (v0.2.0).** All v0 milestones (M0–M6) implemented and passing. MultiTurnFewshot, `Classify` request type, per-request logits processors (vLLM + HF), HiddenStateSpec activation capture, real dataset SHAs in manifests, lm-eval task shim, and CI on Python 3.11/3.12 are all live. CUDA wheels (cu121/cu128/cu130) on GitHub Releases; CPU wheel on PyPI. Built per the design manuscript in [`docs/design.md`](docs/design.md).
 
 ## What this is
 
@@ -37,7 +35,12 @@ See [`docs/design.md`](docs/design.md) for the full design rationale.
 uv pip install anvil-eval
 ```
 
-Wheels ship for `cu121`, `cu128`, `cu130`, plus a CPU fallback. The pure-Python install always works against any torch ≥ 2.4 / CUDA ≥ 12.1.
+The CPU wheel ships to PyPI. CUDA wheels (`cu121`, `cu128`, `cu130`) are attached to each [GitHub Release](https://github.com/bishoymoussa/anvil/releases) and can be installed directly:
+
+```bash
+# Example: CUDA 12.1
+pip install https://github.com/bishoymoussa/anvil/releases/download/v0.2.0/anvil_eval-0.2.0-py3-none-any-cu121.whl
+```
 
 > **Import name:** the Python package is still `import anvil` — only the PyPI distribution name is `anvil-eval`.
 
