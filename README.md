@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/anvil_logo_name.png" alt="anvil" width="420" />
+  <img src="https://raw.githubusercontent.com/bishoymoussa/anvil/main/docs/assets/anvil_logo_name.png" alt="anvil" width="420" />
 </p>
 
 <p align="center">
@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <a href="docs/design.md">Design&nbsp;manuscript</a> ·
+  <a href="https://github.com/bishoymoussa/anvil/blob/main/docs/design.md">Design&nbsp;manuscript</a> ·
   <a href="#install">Install</a> ·
   <a href="#quickstart">Quickstart</a> ·
   <a href="#milestones">Milestones</a>
@@ -245,7 +245,7 @@ GSM8K (M0), MMLU + MMLU-MultiTurn + HumanEval+ (M1), MMMU (M4). Tier 2 lm-evalua
 ## Milestones
 
 <p align="left">
-  <img src="docs/assets/anvil_logo_symbol.png" alt="" width="40" align="right" />
+  <img src="https://raw.githubusercontent.com/bishoymoussa/anvil/main/docs/assets/anvil_logo_symbol.png" alt="" width="40" align="right" />
 </p>
 
 - **M0** — HF slow path, GSM8K, manifest emitted.
@@ -265,7 +265,7 @@ Apache-2.0. See [`LICENSE`](LICENSE).
 ---
 
 <p align="center">
-  <img src="docs/assets/anvil_logo_symbol.png" alt="anvil" width="48" />
+  <img src="https://raw.githubusercontent.com/bishoymoussa/anvil/main/docs/assets/anvil_logo_symbol.png" alt="anvil" width="48" />
   <br />
   <sub><em>Anvil — the same manifest produces the same number, today, tomorrow, and on someone else's machine.</em></sub>
 </p>
