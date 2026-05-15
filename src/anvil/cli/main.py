@@ -17,6 +17,7 @@ import typer
 from anvil._version import __version__
 from anvil.cli.eval import app as eval_app
 from anvil.cli.manifest import app as manifest_app
+from anvil.cli.mcp import app as mcp_app
 from anvil.cli.serve import app as serve_app
 
 app = typer.Typer(
@@ -35,6 +36,11 @@ app.add_typer(
     serve_app,
     name="serve",
     help="Run the OpenAI-compatible HTTP server.",
+)
+app.add_typer(
+    mcp_app,
+    name="mcp",
+    help="Start the Anvil MCP server (stdio or HTTP).",
 )
 
 

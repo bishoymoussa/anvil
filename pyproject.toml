@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "anvil-eval"
-version = "0.3.1"
+version = "0.4.0"
 description = "A research-first, evaluation-first inference library."
 readme = "README.md"
 license = "Apache-2.0"
@@ -45,6 +45,7 @@ flash-attn = ["flash-attn>=2.6"]
 multimodal = ["av>=12.0", "decord>=0.6", "librosa>=0.10"]
 xgrammar = ["xgrammar>=0.1.10"]
 outlines = ["outlines>=0.1"]
+mcp = ["mcp>=1.0"]
 rocm = ["torch>=2.4,<3"]
 xpu = ["torch>=2.4,<3"]
 dev = [
@@ -114,6 +115,7 @@ module = [
     "librosa.*",
     "PIL.*",
     "lm_eval.*",
+    "mcp.*",
 ]
 ignore_missing_imports = true
 

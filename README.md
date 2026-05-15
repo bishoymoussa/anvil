@@ -15,7 +15,7 @@
 
 ---
 
-> **Status: alpha (v0.3.1).** DoLa contrastive decoding, CaaS LLM tier, MultiTurnFewshot, `Classify` request type, per-request logits processors (vLLM + HF), HiddenStateSpec activation capture, real dataset SHAs in manifests, lm-eval task shim, and CI on Python 3.11/3.12 are all live. CUDA wheels (cu121/cu128/cu130) on GitHub Releases; CPU wheel on PyPI.
+> **Status: alpha (v0.4.0).** DoLa contrastive decoding, CaaS LLM tier, MultiTurnFewshot, `Classify` request type, per-request logits processors (vLLM + HF), HiddenStateSpec activation capture, real dataset SHAs in manifests, lm-eval task shim, and CI on Python 3.11/3.12 are all live. CUDA wheels (cu121/cu128/cu130) on GitHub Releases; CPU wheel on PyPI.
 
 ## What this is
 
@@ -39,7 +39,7 @@ The CPU wheel ships to PyPI. CUDA wheels (`cu121`, `cu128`, `cu130`) are attache
 
 ```bash
 # Example: CUDA 12.1
-pip install https://github.com/bishoymoussa/anvil/releases/download/v0.3.1/anvil_eval-0.3.1-py3-none-any-cu121.whl
+pip install https://github.com/bishoymoussa/anvil/releases/download/v0.4.0/anvil_eval-0.4.0-py3-none-any-cu121.whl
 ```
 
 > **Import name:** the Python package is still `import anvil` — only the PyPI distribution name is `anvil-eval`.
@@ -52,7 +52,35 @@ source .venv/bin/activate
 uv pip install -e ".[dev]"
 ```
 
-Optional extras: `.[vllm]` for the vLLM backend, `.[multimodal]` for video/audio, `.[xgrammar]` for tool calling.
+Optional extras: `.[vllm]` for the vLLM backend, `.[multimodal]` for video/audio, `.[xgrammar]` for tool calling, `.[mcp]` for the MCP server.
+
+## MCP server — let your AI agent run evaluations
+
+Install the extra and add Anvil to your Claude Desktop or Claude Code config:
+
+```bash
+pip install 'anvil-eval[mcp]'
+```
+
+```json
+{
+  "mcpServers": {
+    "anvil": { "command": "anvil", "args": ["mcp"] }
+  }
+}
+```
+
+Your agent now has five tools: `anvil_list_tasks`, `anvil_eval`, `anvil_manifest_diff`, `anvil_manifest_verify`, and `anvil_doctor`. Ask it naturally:
+
+> *"Run MMLU 5-shot on Llama-3.1-8B and save the manifest to run.json"*
+> *"Compare run.json with last_week.json and explain the score gap"*
+> *"Check my environment for any CUDA or token issues"*
+
+For a local HTTP endpoint instead of stdio:
+
+```bash
+anvil mcp --http   # listens on localhost:8765
+```
 
 ## Quickstart
 
@@ -219,7 +247,7 @@ Tool calling is constrained-decoding-driven (one grammar; no per-model `--tool-c
 
 ```bash
 anvil doctor
-# anvil         ok    anvil 0.3.0
+# anvil         ok    anvil 0.4.0
 # python        ok    Python 3.11.15
 # cuda          warn  CUDA not available — torch wheel may not match driver
 # transformers  ok    transformers 4.57.6
@@ -257,6 +285,7 @@ GSM8K (M0), MMLU + MMLU-MultiTurn + HumanEval+ (M1), MMMU (M4). Tier 2 lm-evalua
 - **M6** — uv wheels (cu121/cu128/cu130), 5 fast paths, OpenAI-compatible serve, `anvil doctor`.
 - **v0.2.0** — MultiTurnFewshot, Classify request type, HiddenStateSpec, per-request logits processors (HF + vLLM), real dataset SHAs, lm-eval task name resolution.
 - **v0.3.0** — DoLa contrastive decoding, CaaS LLM tier (Anthropic + OpenAI-compatible).
+- **v0.4.0** — MCP server (`anvil mcp`); five tools for AI research agents.
 
 ## License
 
