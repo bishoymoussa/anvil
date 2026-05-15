@@ -18,7 +18,6 @@ exposes a ``bind`` method.
 
 from __future__ import annotations
 
-import math
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -58,7 +57,6 @@ class DoLa:
         embedding (``model.lm_head.weight``) and an optional final layer norm
         (``model.model.norm`` or ``model.transformer.ln_f``).
         """
-        import torch
 
         lm_head = getattr(model, "lm_head", None)
         if lm_head is None or not hasattr(lm_head, "weight"):
@@ -81,10 +79,10 @@ class DoLa:
     def process(
         self,
         request_id: str,
-        token_ids: "torch.Tensor",
-        logits: "torch.Tensor",
-        hidden_states: "torch.Tensor | None",
-    ) -> "torch.Tensor":
+        token_ids: torch.Tensor,
+        logits: torch.Tensor,
+        hidden_states: torch.Tensor | None,
+    ) -> torch.Tensor:
         """Subtract average premature-layer logits from mature-layer logits.
 
         ``hidden_states`` shape: ``[num_layers, seq_len, hidden_dim]``.
